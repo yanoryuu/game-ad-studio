@@ -26,12 +26,15 @@ export type NarrationPlan = {
   overflowLineIds: string[];
 };
 
-/** Lines that can be played: matching lang, non-empty text, audioPath + durationSec (any status). */
+/**
+ * Lines that can be played: matching lang, non-empty text (v3: optional for engine "recorded"),
+ * audioPath + durationSec (any status).
+ */
 export function playableLines(project: Project, lang: Lang): ScriptLine[] {
   return project.script.filter(
     (l) =>
       l.lang === lang &&
-      l.text.trim() !== "" &&
+      (l.voice.engine === "recorded" || l.text.trim() !== "") &&
       typeof l.audioPath === "string" &&
       l.audioPath !== "" &&
       typeof l.durationSec === "number" &&
@@ -40,10 +43,10 @@ export function playableLines(project: Project, lang: Lang): ScriptLine[] {
   );
 }
 
-const toFrames = (sec: number, fps: number) => Math.round(Math.max(0, sec) * fps);
+export const toFrames = (sec: number, fps: number) => Math.round(Math.max(0, sec) * fps);
 
 /** Line placement relative to its section start (frames). */
-type RelLine = { line: ScriptLine; rel: number; natural: number };
+export type RelLine = { line: ScriptLine; rel: number; natural: number };
 
 export type NarrationLayout = {
   hook: RelLine[];

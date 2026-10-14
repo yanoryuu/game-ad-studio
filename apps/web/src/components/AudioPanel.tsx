@@ -2,16 +2,26 @@ import { useRef, useState } from "react";
 import { DEFAULT_BGM, type AudioSettings, type Bgm, type Project } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import { api, errorMessage } from "../api";
-import type { UpdateProject } from "../hooks/useProject";
+import { useBgmAnalyze } from "../hooks/useBgmAnalysis";
+import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { basename, cx } from "../util";
+import { BeatPanel } from "./BeatPanel";
 import { Icon, Section, Slider, Spinner, Switch } from "./ui";
 
 const AUDIO_ACCEPT = ".mp3,.wav,.m4a,.ogg,.aac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/ogg,audio/aac";
 const AUDIO_EXT = /\.(mp3|wav|m4a|ogg|aac)$/i;
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 
-export function AudioPanel(props: { project: Project; update: UpdateProject }) {
+export function AudioPanel(props: {
+  project: Project;
+  update: UpdateProject;
+  mutateOnServer: MutateOnServer;
+  serverOk: boolean;
+  /** output length (preview language), drawn on the beat strip */
+  videoSec: number;
+}) {
   const { project, update } = props;
+  const analyze = useBgmAnalyze(props.mutateOnServer);
   const audio = project.audio;
   const bgm = audio.bgm;
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -35,8 +45,17 @@ export function AudioPanel(props: { project: Project; update: UpdateProject }) {
     try {
       const res = await api.uploadAsset(project.id, file);
       setFileName(file.name);
-      // keep previous mix settings when replacing the track
-      update((p) => ({ ...p, audio: { ...p.audio, bgm: { ...DEFAULT_BGM, ...(p.audio.bgm ?? {}), path: res.path } } }));
+      // Keep the previous mix settings when replacing the track, but never its beat analysis (§6.2).
+      update((p) => {
+        const prev = p.audio.bgm;
+        const bgm: Bgm = prev
+          ? { ...DEFAULT_BGM, volume: prev.volume, duckingDb: prev.duckingDb, fadeOutSec: prev.fadeOutSec, loop: prev.loop, path: res.path }
+          : { ...DEFAULT_BGM, path: res.path };
+        return { ...p, audio: { ...p.audio, bgm } };
+      });
+      analyze.clearError();
+      // The trailer cuts on the beat: detect beats right away.
+      if (project.template === "trailer" && props.serverOk) void analyze.start();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
@@ -88,6 +107,15 @@ export function AudioPanel(props: { project: Project; update: UpdateProject }) {
                 </button>
               </div>
               <audio className="bgm-audio" controls preload="none" src={assetUrl("", project.id, bgm.path)} />
+              <BeatPanel
+                project={project}
+                bgm={bgm}
+                videoSec={props.videoSec}
+                starting={analyze.starting}
+                error={analyze.error}
+                disabled={!props.serverOk}
+                onAnalyze={() => void analyze.start()}
+              />
             </>
           ) : (
             <button type="button" className="bgm-empty" onClick={() => inputRef.current?.click()}>

@@ -82,7 +82,11 @@ export const renderJobSchema = z.object({
   progress: z.number().min(0).max(1),
   /** project-relative, e.g. "renders/20261014-120000_16x9_ja.mp4" (download via /files/:pid/<outputPath>) */
   outputPath: z.string().optional(),
+  /** absolute local path of the output file (for "copy path") */
+  absPath: z.string().optional(),
   error: z.string().optional(),
+  /** v3: ISO 8601 time the job was queued */
+  createdAt: z.string().optional(),
 });
 export type RenderJob = z.infer<typeof renderJobSchema>;
 
@@ -116,9 +120,20 @@ export const ttsStatusResponseSchema = z.object({
   }),
   whisper: z.object({
     ok: z.boolean(),
-    /** e.g. "base.en" */
+    /** e.g. "base.en" (English: Piper word timing + recorded en lines) */
     model: z.string(),
     error: z.string().optional(),
+    /**
+     * v3: multilingual model used for recorded ja lines (config.whisper.multilingualModel, default "small").
+     * Absent until the server implements it.
+     */
+    multilingual: z
+      .object({
+        ok: z.boolean(),
+        model: z.string(),
+        error: z.string().optional(),
+      })
+      .optional(),
   }),
 });
 export type TtsStatusResponse = z.infer<typeof ttsStatusResponseSchema>;
@@ -140,7 +155,9 @@ export type TtsVoice = z.infer<typeof ttsVoiceSchema>;
 
 /**
  * POST /api/projects/:id/tts -> 200 Project (synchronous).
- * lineIds omitted: every line of `lang` with non-empty text and status !== "ok".
+ * lineIds omitted: every line of `lang` with hasNarrationInput(line) (v3: recorded lines with a sourcePath count)
+ * and status !== "ok" (plus lines without input that still have audio -> cleared).
+ * v3: engine "recorded" lines are converted from voice.sourcePath instead of synthesized (ARCHITECTURE §6.10).
  * lineIds given: exactly those lines (must belong to `lang`), regardless of status.
  * Per-line failures do NOT fail the request: the line gets status "error" + error message.
  */
@@ -161,3 +178,69 @@ export type TtsPreviewRequest = z.infer<typeof ttsPreviewRequestSchema>;
 
 /** POST /api/projects/:id/sources -> 201 */
 export type AddSourceResponse = Project;
+
+/* ------------------------------------------------------------------ */
+/* Phase 3: batch render / render history                               */
+/* ------------------------------------------------------------------ */
+
+export const renderTargetSchema = z.object({ format: formatSchema, lang: langSchema });
+export type RenderTarget = z.infer<typeof renderTargetSchema>;
+
+/**
+ * POST /api/projects/:id/render-batch -> RenderBatchResponse.
+ * One queued job per target (duplicate targets are rendered once). Jobs run sequentially in the global queue.
+ */
+export const renderBatchRequestSchema = z.object({
+  targets: z.array(renderTargetSchema).min(1).max(8),
+  /** overrides project.fps for every target */
+  fps: fpsSchema.optional(),
+});
+export type RenderBatchRequest = z.infer<typeof renderBatchRequestSchema>;
+
+export const renderBatchResponseSchema = z.object({
+  /** in the order of the (deduplicated) targets; poll each with GET /api/render/:jobId */
+  jobIds: z.array(z.string()),
+});
+export type RenderBatchResponse = z.infer<typeof renderBatchResponseSchema>;
+
+/** One finished file in projects/<id>/renders/. */
+export const renderFileSchema = z.object({
+  /** file name, e.g. "20261014-120000_16x9_ja.mp4" */
+  name: z.string(),
+  /** project-relative path "renders/<name>" */
+  path: z.string(),
+  /** absolute local path (for "copy path") */
+  absPath: z.string().optional(),
+  /** download/preview URL (relative): "/files/<projectId>/renders/<name>" */
+  url: z.string(),
+  /** parsed from the name (`<yyyymmdd-hhmmss>_<16x9|9x16>_<ja|en>[-n].mp4`); absent if it doesn't match */
+  format: formatSchema.optional(),
+  lang: langSchema.optional(),
+  sizeBytes: z.number().int().nonnegative(),
+  /** ISO 8601 modification time */
+  mtime: z.string(),
+});
+export type RenderFile = z.infer<typeof renderFileSchema>;
+
+/** GET /api/projects/:id/renders -> RenderListResponse */
+export const renderListResponseSchema = z.object({
+  /** .mp4 files, newest (mtime) first */
+  files: z.array(renderFileSchema),
+  /**
+   * This project's jobs known to the running server (in memory, lost on restart), newest first:
+   * queued / bundling / rendering ones plus recently finished (done / error) ones.
+   */
+  jobs: z.array(renderJobSchema),
+});
+export type RenderListResponse = z.infer<typeof renderListResponseSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Phase 3: BGM beat analysis                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * POST /api/projects/:id/bgm/analyze (no body)
+ * -> 202 Project (audio.bgm.analysisStatus = "running"); poll GET /api/projects/:id until "done" / "error".
+ * 409 if there is no audio.bgm or its analysis is already running.
+ */
+export type BgmAnalyzeStartResponse = Project;

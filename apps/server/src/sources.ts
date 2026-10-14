@@ -132,13 +132,19 @@ export async function recoverInterruptedJobs(): Promise<void> {
     }
     const pending = p.sources.filter((s) => s.proxyStatus === "pending");
     const running = p.sources.filter((s) => s.analysisStatus === "running");
-    if (running.length) {
+    const bgmRunning = p.audio.bgm?.analysisStatus === "running";
+    if (running.length || bgmRunning) {
       await updateProject(id, (q) => {
         for (const s of q.sources) {
           if (s.analysisStatus === "running") {
             s.analysisStatus = "error";
             s.analysisError = "Interrupted (server restarted)";
           }
+        }
+        // v3: BGM beat analysis (routes/bgm.ts)
+        if (q.audio.bgm?.analysisStatus === "running") {
+          q.audio.bgm.analysisStatus = "error";
+          q.audio.bgm.analysisError = "Interrupted (server restarted)";
         }
       }).catch(() => {});
     }

@@ -1,10 +1,23 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SERVER_PORT } from "@gas/shared";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 /** <repo>/ (this file lives at <repo>/apps/server/src/paths.ts) */
 export const REPO_ROOT = path.resolve(here, "../../..");
+
+/**
+ * Port the server listens on (also the asset base URL host used by renders): env GAS_PORT, else PORT,
+ * else SERVER_PORT (3101). The web dev proxy always targets 3101; overrides are for test instances.
+ */
+export const LISTEN_PORT: number = (() => {
+  for (const v of [process.env.GAS_PORT, process.env.PORT]) {
+    const n = Number(v);
+    if (v && Number.isInteger(n) && n > 0 && n < 65536) return n;
+  }
+  return SERVER_PORT;
+})();
 
 /** <repo>/projects — override with env GAS_PROJECTS_DIR */
 export const PROJECTS_DIR = process.env.GAS_PROJECTS_DIR

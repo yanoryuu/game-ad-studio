@@ -6,7 +6,6 @@ import multer from "multer";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import {
-  SERVER_PORT,
   addSourceRequestSchema,
   createProjectRequestSchema,
   migrateProject,
@@ -19,9 +18,11 @@ import {
 import { badRequest, errorHandler, notFound, notFoundHandler, parseBody } from "./errors";
 import { sendFileWithRange, serveProjectFile } from "./files";
 import { toolAvailable } from "./media";
-import { PROJECTS_DIR, projectDir } from "./paths";
+import { LISTEN_PORT, PROJECTS_DIR, projectDir } from "./paths";
 import { enqueueRender, getJob } from "./render";
 import { registerAnalysisRoutes } from "./routes/analysis";
+import { registerBgmRoutes } from "./routes/bgm";
+import { registerRenderRoutes } from "./routes/renders";
 import { registerTtsRoutes } from "./routes/tts";
 import { recoverInterruptedJobs, registerSource } from "./sources";
 import {
@@ -167,19 +168,21 @@ app.get("/api/render/:jobId", (req, res) => {
 app.get("/files/:projectId/*path", serveProjectFile);
 
 /* ------------------------------------------------------------------ */
-/* Phase 2 route modules (owned by server-highlight / server-tts)       */
+/* Route modules (Phase 2: analysis / tts, Phase 3: bgm / renders)       */
 /* ------------------------------------------------------------------ */
 
 registerAnalysisRoutes(app);
 registerTtsRoutes(app);
+registerBgmRoutes(app);
+registerRenderRoutes(app);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
 
 await fsp.mkdir(PROJECTS_DIR, { recursive: true });
 await recoverInterruptedJobs();
-const server = app.listen(SERVER_PORT, () => {
-  console.log(`[server] listening on http://localhost:${SERVER_PORT} (projects: ${PROJECTS_DIR})`);
+const server = app.listen(LISTEN_PORT, () => {
+  console.log(`[server] listening on http://localhost:${LISTEN_PORT} (projects: ${PROJECTS_DIR})`);
 });
 // TTS synthesis requests can take a while; never time requests out.
 server.requestTimeout = 0;

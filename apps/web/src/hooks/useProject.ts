@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Project, ScriptLine, Voice } from "@gas/shared";
+import { sameVoice, type AudioSettings, type Project, type ScriptLine } from "@gas/shared";
 import { api, ApiError, errorMessage } from "../api";
 
 export type SaveState = "saved" | "dirty" | "saving" | "error";
@@ -7,10 +7,23 @@ export type SaveState = "saved" | "dirty" | "saving" | "error";
 const SAVE_DEBOUNCE_MS = 800;
 const RETRY_MS = 4000;
 
-const sameVoice = (a: Voice, b: Voice) => a.engine === b.engine && a.speaker === b.speaker && a.speed === b.speed;
-
 /** Fields of a script line written by the server on synthesis. */
-const SYNTH_KEYS = ["audioPath", "durationSec", "captions", "status", "error", "credit"] as const;
+const SYNTH_KEYS = ["audioPath", "durationSec", "captions", "status", "error", "credit", "warning"] as const;
+
+/** Server-owned fields of audio.bgm (beat analysis), valid only for the same bgm.path (§6.2). */
+const BGM_SERVER_KEYS = ["beats", "bpm", "analysisStatus", "analysisError"] as const;
+
+function mergeBgm(local: AudioSettings, server: AudioSettings): AudioSettings {
+  const lb = local.bgm;
+  const sb = server.bgm;
+  if (!lb || !sb || lb.path !== sb.path) return local;
+  const bgm = { ...lb };
+  for (const k of BGM_SERVER_KEYS) {
+    if (sb[k] === undefined) delete (bgm as Partial<typeof bgm>)[k];
+    else (bgm as Record<string, unknown>)[k] = sb[k];
+  }
+  return { ...local, bgm };
+}
 
 /**
  * Merges the server-owned parts of `server` into `local` without touching local edits
@@ -18,6 +31,7 @@ const SYNTH_KEYS = ["audioPath", "durationSec", "captions", "status", "error", "
  *  - sources: server values (local order kept; locally removed ones stay removed)
  *  - candidates: server list, `adopted` from local when local knows the candidate
  *  - script: local, except synthesis results of `scriptLineIds` whose text/voice/lang still match
+ *  - audio.bgm: local, with the beat analysis fields from the server when the path matches
  */
 export function mergeServerOwned(
   local: Project,
@@ -56,7 +70,7 @@ export function mergeServerOwned(
       return next;
     });
   }
-  return { ...local, sources, candidates, script, updatedAt: server.updatedAt };
+  return { ...local, sources, candidates, script, audio: mergeBgm(local.audio, server.audio), updatedAt: server.updatedAt };
 }
 
 export type ServerMutationOptions = {

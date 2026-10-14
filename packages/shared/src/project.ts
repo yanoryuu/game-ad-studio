@@ -144,8 +144,17 @@ export const clipSchema = z.object({
   slot: clipSlotSchema,
   /** game audio volume 0..1 */
   gameVolume: z.number().min(0).max(1),
-  /** Phase 3 (9:16 crop): horizontal focus 0..1 (0.5 = center) */
+  /**
+   * 9:16 with style.vertical.mode "crop": horizontal center of the full-bleed crop, 0..1
+   * (0 = left edge, 0.5 = center = default when absent, 1 = right edge). Also used as the
+   * object-position of the blurred background in "blur" mode.
+   */
   focusX: z.number().min(0).max(1).optional(),
+  /**
+   * v3, template "features": id of the templateData.features.items entry this MAIN-slot clip belongs to.
+   * Absent / unknown id -> distributed round-robin (see assignFeatureClips). Ignored by other templates.
+   */
+  featureId: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
 });
 export type Clip = z.infer<typeof clipSchema>;
 
@@ -189,23 +198,56 @@ export type Captions = z.infer<typeof captionsSchema>;
 export const scriptSectionIdSchema = z.enum(["hook", "main", "cta"]);
 export type ScriptSectionId = z.infer<typeof scriptSectionIdSchema>;
 
+/** Engines that SYNTHESIZE speech (voice lists, preview). */
 export const ttsEngineSchema = z.enum(["voicevox", "piper"]);
 export type TtsEngine = z.infer<typeof ttsEngineSchema>;
 
-export const voiceSchema = z.object({
-  engine: ttsEngineSchema,
-  /** VOICEVOX: style id as a decimal string (e.g. "3"). Piper: voice name = .onnx basename (e.g. "en_US-lessac-medium"). */
-  speaker: z.string().min(1),
-  /** speech rate multiplier, 1 = normal (VOICEVOX speedScale / Piper length_scale = 1/speed) */
-  speed: z.number().min(0.5).max(2),
-});
+/** v3: engine of a script line's voice = a TTS engine, or "recorded" (user-uploaded recording). */
+export const voiceEngineSchema = z.enum(["voicevox", "piper", "recorded"]);
+export type VoiceEngine = z.infer<typeof voiceEngineSchema>;
+
+export const voiceSchema = z
+  .object({
+    engine: voiceEngineSchema,
+    /**
+     * VOICEVOX: style id as a decimal string (e.g. "3"). Piper: voice name = .onnx basename (e.g. "en_US-lessac-medium").
+     * "recorded": unused, may be "" (required non-empty for the TTS engines).
+     */
+    speaker: z.string(),
+    /** speech rate multiplier, 1 = normal (VOICEVOX speedScale / Piper length_scale = 1/speed). Ignored for "recorded". */
+    speed: z.number().min(0.5).max(2),
+    /**
+     * v3, engine "recorded" only: asset ref of the uploaded recording ("assets/<nanoid>.<ext>", via POST /assets).
+     * POST /tts converts it to tts/<lineId>.wav. Absent -> the line cannot be "synthesized" (status "error").
+     */
+    sourcePath: assetRefSchema.optional(),
+  })
+  .refine((v) => v.engine === "recorded" || v.speaker.length > 0, {
+    message: "voice.speaker is required for TTS engines",
+    path: ["speaker"],
+  });
 export type Voice = z.infer<typeof voiceSchema>;
+
+/** True when two voices produce the same audio (engine, speaker, speed and, for "recorded", sourcePath). */
+export function sameVoice(a: Voice, b: Voice): boolean {
+  return a.engine === b.engine && a.speaker === b.speaker && a.speed === b.speed && a.sourcePath === b.sourcePath;
+}
+
+/** v3: a recorded (uploaded) narration voice. */
+export function createRecordedVoice(sourcePath?: string): Voice {
+  return sourcePath ? { engine: "recorded", speaker: "", speed: 1, sourcePath } : { engine: "recorded", speaker: "", speed: 1 };
+}
 
 export const scriptLineStatusSchema = z.enum(["none", "ok", "stale", "error"]);
 export type ScriptLineStatus = z.infer<typeof scriptLineStatusSchema>;
 
 /**
  * One narration line (v2). The array order of lines with the same (lang, section) = playback order.
+ *
+ * v3 "recorded" lines (voice.engine === "recorded"): the audio is the uploaded voice.sourcePath, converted by
+ * POST /tts (same endpoint, same status rules). `text` is optional for them (playable with empty text); when
+ * non-empty it is used as the caption text (timed with whisper), otherwise captions are the whisper transcript.
+ * The web sets "stale" when sourcePath or text changes (sameVoice() covers sourcePath).
  *
  * Status rules:
  *  - "none"  : never synthesized (no audioPath / durationSec, captions = [])
@@ -236,11 +278,31 @@ export const scriptLineSchema = z.object({
   error: z.string().optional(),
   /**
    * Required credit for the voice used, set by the server on synthesis.
-   * VOICEVOX: "VOICEVOX:<character name>" (e.g. "VOICEVOX:ずんだもん"). Piper: absent.
+   * VOICEVOX: "VOICEVOX:<character name>" (e.g. "VOICEVOX:ずんだもん"). Piper / recorded: absent.
    */
   credit: z.string().optional(),
+  /**
+   * v3, server-owned: non-fatal problem of the last successful synthesis (e.g. "whisper failed, captions use
+   * proportional timing"). Set together with status "ok"; removed on the next synthesis / clear.
+   */
+  warning: z.string().optional(),
+  /**
+   * v3, section "main" + template "features": id of the templateData.features.items entry this line is
+   * bound to (played inside that feature). Absent / unknown -> unbound (ARCHITECTURE §5.5). Ignored otherwise.
+   */
+  featureId: z.string().regex(/^[A-Za-z0-9_-]+$/).optional(),
 });
 export type ScriptLine = z.infer<typeof scriptLineSchema>;
+
+/**
+ * v3: true if the line has something to turn into audio: non-empty text (TTS engines), or an uploaded
+ * recording (engine "recorded" + sourcePath; text optional). Used for POST /tts target selection,
+ * "playable" checks and the web's synth buttons.
+ */
+export function hasNarrationInput(line: Pick<ScriptLine, "text" | "voice">): boolean {
+  if (line.voice.engine === "recorded") return !!line.voice.sourcePath;
+  return line.text.trim() !== "";
+}
 
 /* ------------------------------------------------------------------ */
 /* Audio (v2) / style                                                   */
@@ -257,6 +319,17 @@ export const bgmSchema = z.object({
   fadeOutSec: z.number().nonnegative(),
   /** true: loop to fill the video; false: play once (silence after it ends) */
   loop: z.boolean(),
+  /**
+   * v3, server-owned (POST /bgm/analyze): beat times in seconds from the start of the file, ascending.
+   * Only valid for the current `path` (the web drops beats/bpm/analysis* when it replaces the file).
+   */
+  beats: z.array(z.number().nonnegative()).optional(),
+  /** v3, server-owned: estimated tempo (beats per minute) */
+  bpm: z.number().positive().optional(),
+  /** v3, server-owned: beat analysis state; absent = "none" */
+  analysisStatus: analysisStatusSchema.optional(),
+  /** v3, server-owned: set only when analysisStatus === "error" */
+  analysisError: z.string().optional(),
 });
 export type Bgm = z.infer<typeof bgmSchema>;
 
@@ -291,6 +364,19 @@ export const captionStyleSchema = z.object({
 });
 export type CaptionStyle = z.infer<typeof captionStyleSchema>;
 
+/** v3: how 16:9 footage is fit into a 9:16 frame. */
+export const verticalModeSchema = z.enum(["blur", "crop"]);
+export type VerticalMode = z.infer<typeof verticalModeSchema>;
+
+export const verticalStyleSchema = z.object({
+  /**
+   * "blur" (default): full 16:9 video centered, blurred copy fills the bands above/below.
+   * "crop": full-bleed 9:16 crop of the footage, horizontal center = clip.focusX (default 0.5).
+   */
+  mode: verticalModeSchema,
+});
+export type VerticalStyle = z.infer<typeof verticalStyleSchema>;
+
 export const styleSchema = z.object({
   /** CSS color, e.g. "#ff3b30" */
   primaryColor: z.string(),
@@ -300,14 +386,68 @@ export const styleSchema = z.object({
   watermark: watermarkSchema,
   /** v2 */
   captions: captionStyleSchema,
+  /** v3: 9:16 layout (default { mode: "blur" }) */
+  vertical: verticalStyleSchema,
 });
 export type Style = z.infer<typeof styleSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Template data (v3)                                                   */
+/* ------------------------------------------------------------------ */
+
+const itemIdSchema = z.string().regex(/^[A-Za-z0-9_-]+$/);
+
+/** One "魅力" (selling point) of the features template. */
+export const featureItemSchema = z.object({
+  /** "feat_" + id; referenced by clip.featureId / scriptLine.featureId */
+  id: itemIdSchema,
+  /** heading shown with the feature, e.g. { ja: "爽快なアクション", en: "Thrilling action" } */
+  heading: localizedTextSchema,
+  /** optional smaller line under the heading ("" or absent = none) */
+  sub: localizedTextSchema.optional(),
+});
+export type FeatureItem = z.infer<typeof featureItemSchema>;
+
+export const featuresDataSchema = z.object({
+  /** display order = playback order; the UI keeps 2..4 items (0..4 are valid) */
+  items: z.array(featureItemSchema).max(4),
+});
+export type FeaturesData = z.infer<typeof featuresDataSchema>;
+
+/** Big full-screen text card of the trailer template. */
+export const trailerCardSchema = z.object({
+  /** "card_" + id */
+  id: itemIdSchema,
+  text: localizedTextSchema,
+  /**
+   * Shown right AFTER the cut with this index in trailerClipOrder(project) (0-based; -1 = before the first cut).
+   * Index >= number of cuts -> after the last cut (before the logo reveal).
+   */
+  afterClipIndex: z.number().int().min(-1),
+});
+export type TrailerCard = z.infer<typeof trailerCardSchema>;
+
+export const trailerDataSchema = z.object({
+  cards: z.array(trailerCardSchema),
+  /** snap cut points to audio.bgm.beats (when a BGM with beats exists) */
+  beatSync: z.boolean(),
+  /** logo / title reveal before the end card */
+  logoReveal: z.boolean(),
+});
+export type TrailerData = z.infer<typeof trailerDataSchema>;
+
+/** v3: per-template settings. Every template's data is kept regardless of the selected template. */
+export const templateDataSchema = z.object({
+  features: featuresDataSchema,
+  trailer: trailerDataSchema,
+});
+export type TemplateData = z.infer<typeof templateDataSchema>;
 
 /* ------------------------------------------------------------------ */
 /* Project                                                              */
 /* ------------------------------------------------------------------ */
 
-export const PROJECT_SCHEMA_VERSION = 2 as const;
+export const PROJECT_SCHEMA_VERSION = 3 as const;
 
 export const projectSchema = z.object({
   schemaVersion: z.literal(PROJECT_SCHEMA_VERSION),
@@ -335,6 +475,8 @@ export const projectSchema = z.object({
   /** v2: replaces the v1 top-level `bgm` */
   audio: audioSettingsSchema,
   style: styleSchema,
+  /** v3 */
+  templateData: templateDataSchema,
 });
 export type Project = z.infer<typeof projectSchema>;
 
@@ -394,7 +536,58 @@ export const DEFAULT_STYLE: Style = {
   font: "noto-sans-jp",
   watermark: { position: "top-right", scale: 1 },
   captions: { enabled: true, position: "bottom", size: "m" },
+  vertical: { mode: "blur" },
 };
+
+/** Defaults of templateData (deterministic ids, so repeated in-memory migrations of the same file agree). */
+export function createDefaultTemplateData(): TemplateData {
+  return {
+    features: {
+      items: [
+        { id: "feat_1", heading: { ja: "爽快なアクション", en: "Thrilling action" } },
+        { id: "feat_2", heading: { ja: "奥深い戦略", en: "Deep strategy" } },
+        { id: "feat_3", heading: { ja: "美しい世界", en: "A gorgeous world" } },
+      ],
+    },
+    trailer: {
+      cards: [
+        { id: "card_1", text: { ja: "運命に抗え", en: "DEFY YOUR FATE" }, afterClipIndex: 1 },
+        { id: "card_2", text: { ja: "すべてを賭けろ", en: "RISK IT ALL" }, afterClipIndex: 3 },
+      ],
+      beatSync: true,
+      logoReveal: true,
+    },
+  };
+}
+
+/**
+ * Template "features": main-slot clips per feature item (keys = item ids, in item order; each list in clip
+ * array order). A clip whose featureId matches an item goes there; the others ("unassigned": no / unknown
+ * featureId) are distributed ROUND-ROBIN in clip array order: the k-th unassigned clip -> items[k % N].
+ * Hook-slot clips are not included (they play in the intro). No items -> {}.
+ */
+export function assignFeatureClips(project: Pick<Project, "clips" | "templateData">): Record<string, Clip[]> {
+  const items = project.templateData.features.items;
+  const out: Record<string, Clip[]> = {};
+  for (const it of items) out[it.id] = [];
+  if (items.length === 0) return out;
+  let k = 0;
+  for (const c of project.clips) {
+    if (c.slot !== "main") continue;
+    const own = c.featureId ? out[c.featureId] : undefined;
+    if (own) own.push(c);
+    else out[items[k++ % items.length]!.id]!.push(c);
+  }
+  return out;
+}
+
+/**
+ * Template "trailer": the cut list = hook-slot clips (array order) followed by main-slot clips (array order).
+ * trailerCard.afterClipIndex indexes into THIS list (an unusable clip keeps its index but produces no cut).
+ */
+export function trailerClipOrder(project: Pick<Project, "clips">): Clip[] {
+  return [...project.clips.filter((c) => c.slot === "hook"), ...project.clips.filter((c) => c.slot === "main")];
+}
 
 /** New empty narration line with the default voice of `lang`. */
 export function createScriptLine(
@@ -415,14 +608,29 @@ export function createScriptLine(
   };
 }
 
-/** Unique credits (e.g. "VOICEVOX:ずんだもん") required by the narration lines of `lang` (all langs if omitted). */
-export function collectCredits(project: Project, lang?: Lang): string[] {
+/**
+ * Unique credits (e.g. "VOICEVOX:ずんだもん") required by the narration lines of `lang` (all langs if omitted).
+ * A line's stored `credit` (set on synthesis) wins; for VOICEVOX lines without one (not synthesized yet) the
+ * credit is looked up by speaker in `voices` (e.g. GET /api/tts/voices?engine=voicevox), falling back to
+ * DEFAULT_VOICEVOX_CREDIT for the default speaker. Lines with empty text, Piper and recorded lines need none.
+ */
+export function collectCredits(
+  project: Project,
+  lang?: Lang,
+  voices?: readonly { speaker: string; credit?: string }[],
+): string[] {
   const out = new Set<string>();
   for (const l of project.script) {
     if (lang && l.lang !== lang) continue;
     if (!l.text.trim()) continue;
-    if (l.credit) out.add(l.credit);
-    else if (l.voice.engine === "voicevox" && l.voice.speaker === DEFAULT_VOICEVOX_SPEAKER) out.add(DEFAULT_VOICEVOX_CREDIT);
+    if (l.credit) {
+      out.add(l.credit);
+      continue;
+    }
+    if (l.voice.engine !== "voicevox") continue;
+    const looked = voices?.find((v) => v.speaker === l.voice.speaker)?.credit;
+    if (looked) out.add(looked);
+    else if (l.voice.speaker === DEFAULT_VOICEVOX_SPEAKER) out.add(DEFAULT_VOICEVOX_CREDIT);
   }
   return [...out];
 }
@@ -456,5 +664,6 @@ export function createDefaultProject(
     captions: { ja: [], en: [] },
     audio: structuredClone(DEFAULT_AUDIO),
     style: structuredClone(DEFAULT_STYLE),
+    templateData: createDefaultTemplateData(),
   };
 }

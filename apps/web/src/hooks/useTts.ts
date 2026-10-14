@@ -142,21 +142,13 @@ export function useAudioPlayer() {
 }
 
 /**
- * collectCredits() plus, for VOICEVOX lines not synthesized yet (no `credit`), the credit of the selected
- * voice from the voice list (collectCredits alone only knows the default speaker).
+ * Credits required by the narration of `lang`: shared collectCredits() with the VOICEVOX voice list, so lines
+ * not synthesized yet resolve their speaker credit (ARCHITECTURE §7).
  */
 export function useRequiredCredits(project: Project, lang: Lang): string[] {
   const needsLookup = project.script.some(
     (l) => l.lang === lang && l.text.trim() && l.voice.engine === "voicevox" && !l.credit,
   );
   const { entry } = useTtsVoices("voicevox", needsLookup);
-  const out = new Set(collectCredits(project, lang));
-  if (needsLookup && entry.kind === "ok") {
-    for (const l of project.script) {
-      if (l.lang !== lang || !l.text.trim() || l.voice.engine !== "voicevox" || l.credit) continue;
-      const c = entry.voices.find((v) => v.speaker === l.voice.speaker)?.credit;
-      if (c) out.add(c);
-    }
-  }
-  return [...out];
+  return collectCredits(project, lang, entry.kind === "ok" ? entry.voices : undefined);
 }

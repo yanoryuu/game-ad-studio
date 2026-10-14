@@ -1,6 +1,6 @@
 import type React from "react";
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
-import type { Format, Lang, Project } from "@gas/shared";
+import type { Format, Lang, Project, VerticalMode } from "@gas/shared";
 import type { NarrationPlan } from "./narrationLayout";
 import { BODY_FONT } from "./fonts";
 import { isVertical, outline, unitFor } from "./theme";
@@ -97,17 +97,20 @@ const CaptionText: React.FC<{ text: string; lang: Lang; fontSize: number }> = ({
 
 /**
  * Ad-style captions: heavy weight, thick black outline + shadow, pop-in per chunk.
- * Position bottom/center, size m/l. In 9:16 "bottom" sits in the empty band below the (letterboxed)
- * gameplay instead of over it, so HUD elements stay readable.
+ * Position bottom/center, size m/l. In 9:16 "blur" mode "bottom" sits in the empty band below the
+ * (letterboxed) gameplay instead of over it, so HUD elements stay readable; in 9:16 "crop" mode (full-bleed
+ * footage) it sits above the bottom ~16% that short-video apps cover with their own UI.
  */
 export const Captions: React.FC<{
   items: CaptionItem[];
   lang: Lang;
   format: Format;
+  /** style.vertical.mode (only matters for 9:16); default "blur" */
+  verticalMode?: VerticalMode;
   color: string;
   position: "bottom" | "center";
   size: "m" | "l";
-}> = ({ items, lang, format, color, position, size }) => {
+}> = ({ items, lang, format, verticalMode = "blur", color, position, size }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const active = activeAt(items, frame);
@@ -129,6 +132,8 @@ export const Captions: React.FC<{
   let box: React.CSSProperties;
   if (position === "center") {
     box = { justifyContent: "center", alignItems: "center" };
+  } else if (vertical && verticalMode === "crop") {
+    box = { justifyContent: "flex-end", alignItems: "center", paddingBottom: height * 0.16 };
   } else if (vertical) {
     // band below the 16:9 video, which is centered at full width
     const videoBottom = (height + (width * 9) / 16) / 2;

@@ -4,7 +4,7 @@ import { sourceUrl } from "@gas/compositions";
 import { basename, clamp, cx, formatSec, formatTime, round2 } from "../util";
 import { Icon, Segmented } from "./ui";
 
-export type ClipDraft = Pick<Clip, "inSec" | "outSec" | "slot" | "gameVolume">;
+export type ClipDraft = Pick<Clip, "inSec" | "outSec" | "slot" | "gameVolume" | "focusX">;
 
 /**
  * External request to preview a range (e.g. hovering a highlight candidate).
@@ -30,6 +30,11 @@ export function ClipMarker(props: {
   marks?: MarkerMark[];
   /** video + scrub + transport only (candidate browsing) */
   compact?: boolean;
+  /** style.vertical.mode === "crop": show the 9:16 crop frame (clip.focusX) */
+  cropMode?: boolean;
+  /** the preview currently shows 9:16 */
+  previewVertical?: boolean;
+  onShowVertical?: () => void;
 }) {
   const { project, source, editingClip } = props;
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -40,6 +45,7 @@ export function ClipMarker(props: {
   const [loaded, setLoaded] = useState(false);
   const stopAtRef = useRef<number | null>(null);
   const [draft, setDraft] = useState<ClipDraft>(() => initialDraft(source, editingClip));
+  const [showFrame, setShowFrame] = useState(true);
 
   // Reset when switching source / clip under edit.
   const editingId = editingClip?.id ?? null;
@@ -61,9 +67,10 @@ export function ClipMarker(props: {
       d.inSec === editingClip.inSec &&
       d.outSec === editingClip.outSec &&
       d.slot === editingClip.slot &&
-      d.gameVolume === editingClip.gameVolume
+      d.gameVolume === editingClip.gameVolume &&
+      d.focusX === editingClip.focusX
         ? d
-        : { inSec: editingClip.inSec, outSec: editingClip.outSec, slot: editingClip.slot, gameVolume: editingClip.gameVolume },
+        : draftOf(editingClip),
     );
   }, [editingClip]);
 
@@ -264,6 +271,13 @@ export function ClipMarker(props: {
           onError={() => setVideoError(true)}
           onClick={togglePlay}
         />
+        {props.cropMode && !props.compact && showFrame && loaded && !videoError ? (
+          <CropFrame
+            aspect={source.width / source.height}
+            focusX={draft.focusX ?? 0.5}
+            onChange={(focusX) => change({ focusX })}
+          />
+        ) : null}
         {videoError ? (
           <div className="marker-video-msg">
             <Icon.Alert /> プロキシ動画を読み込めません
@@ -390,6 +404,44 @@ export function ClipMarker(props: {
         </label>
       </div>
 
+      {props.cropMode ? (
+        <div className="focus-row">
+          <button
+            type="button"
+            className={cx("btn btn-sm btn-ghost focus-toggle", showFrame && "is-on")}
+            onClick={() => setShowFrame((v) => !v)}
+            title="映像上に 9:16 の切り抜き枠を表示"
+            aria-pressed={showFrame}
+          >
+            <Icon.Crop size={13} /> 9:16 枠
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={draft.focusX ?? 0.5}
+            onChange={(e) => change({ focusX: Number(e.target.value) })}
+            onDoubleClick={() => change({ focusX: 0.5 })}
+            aria-label="9:16 クロップの横位置"
+          />
+          <span className="mono focus-val">{focusLabel(draft.focusX ?? 0.5)}</span>
+          <button
+            className="btn btn-sm btn-ghost"
+            disabled={(draft.focusX ?? 0.5) === 0.5}
+            onClick={() => change({ focusX: 0.5 })}
+            title="中央に戻す"
+          >
+            中央
+          </button>
+          {editingClip && !props.previewVertical && props.onShowVertical ? (
+            <button className="link-btn" onClick={props.onShowVertical} title="プレビューを 9:16 に切り替えて確認">
+              9:16 で確認
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {!editingClip ? (
         <button className="btn btn-primary btn-block" disabled={!valid} onClick={() => props.onAdd(draft)}>
           <Icon.Plus /> クリップを追加
@@ -404,7 +456,78 @@ export function ClipMarker(props: {
   );
 }
 
+function draftOf(clip: Clip): ClipDraft {
+  const d: ClipDraft = { inSec: clip.inSec, outSec: clip.outSec, slot: clip.slot, gameVolume: clip.gameVolume };
+  if (clip.focusX !== undefined) d.focusX = clip.focusX;
+  return d;
+}
+
 function initialDraft(source: Source, clip: Clip | null): ClipDraft {
-  if (clip) return { inSec: clip.inSec, outSec: clip.outSec, slot: clip.slot, gameVolume: clip.gameVolume };
+  if (clip) return draftOf(clip);
   return { inSec: 0, outSec: round2(Math.min(source.durationSec, DEFAULT_LEN)), slot: "main", gameVolume: 0.8 };
+}
+
+function focusLabel(x: number): string {
+  return `${Math.round(x * 100)}%`;
+}
+
+/**
+ * Draggable 9:16 crop frame over the 16:9 marker video (ARCHITECTURE §5.7: object-position focusX*100% 50%).
+ * The box matches the displayed video content (object-fit: contain), the frame width = 9:16 of its height.
+ */
+function CropFrame(props: { aspect: number; focusX: number; onChange: (x: number) => void }) {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<{ x: number; f: number } | null>(null);
+  const a = Number.isFinite(props.aspect) && props.aspect > 0 ? props.aspect : 16 / 9;
+  const box = a >= 16 / 9 ? { width: "100%", height: `${((16 / 9) / a) * 100}%` } : { width: `${(a / (16 / 9)) * 100}%`, height: "100%" };
+  const cw = Math.min(1, 9 / 16 / a); // crop width as a fraction of the video width
+  const left = props.focusX * (1 - cw);
+
+  const onDown = (e: PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { x: e.clientX, f: props.focusX };
+  };
+  const onMove = (e: PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    const el = boxRef.current;
+    if (!d || !el || cw >= 1) return;
+    const w = el.getBoundingClientRect().width * (1 - cw);
+    props.onChange(round2(clamp(d.f + (e.clientX - d.x) / w, 0, 1)));
+  };
+  const onUp = () => {
+    drag.current = null;
+  };
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 0.1 : 0.02;
+    if (e.key === "ArrowLeft") props.onChange(round2(clamp(props.focusX - step, 0, 1)));
+    else if (e.key === "ArrowRight") props.onChange(round2(clamp(props.focusX + step, 0, 1)));
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  return (
+    <div className="crop-box" ref={boxRef} style={box}>
+      <div
+        className="crop-frame"
+        style={{ left: `${left * 100}%`, width: `${cw * 100}%` }}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+        onKeyDown={onKey}
+        onClick={(e) => e.stopPropagation()}
+        tabIndex={0}
+        role="slider"
+        aria-label="9:16 クロップ位置(ドラッグ / ← →)"
+        aria-valuemin={0}
+        aria-valuemax={1}
+        aria-valuenow={props.focusX}
+      >
+        <span className="crop-tag">9:16</span>
+      </div>
+    </div>
+  );
 }

@@ -17,9 +17,10 @@ import { projectDir } from "../paths";
 import { buildEnCaptions } from "./enCaptions";
 import { buildJaCaptions } from "./jaCaptions";
 import { piperStatus, piperSynthesize, piperVoices } from "./piper";
-import { audioDuration, normalizePeak, toWhisperWav } from "./proc";
+import { InvalidVoiceError, audioDuration, normalizePeak, peakDb, runOk, toWhisperWav } from "./proc";
+import { buildRecordedJaCaptions, isLikelyHallucination, scriptMatchRatio } from "./recordedCaptions";
 import { voicevoxCredit, voicevoxSynthesize, voicevoxVersion, voicevoxVoices } from "./voicevox";
-import { whisperStatus, whisperWords } from "./whisper";
+import { whisperJaSegments, whisperStatus, whisperWords, type TimedSegment, type WordTiming } from "./whisper";
 
 export type LineSynthesis = {
   audioPath: string;
@@ -61,8 +62,122 @@ async function replaceFile(tmp: string, dest: string): Promise<void> {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* v3: recorded narration (ARCHITECTURE §6.10)                          */
+/* ------------------------------------------------------------------ */
+
+export const RECORDED_SAMPLE_RATE = 48000;
+/** Leading/trailing silence below this level longer than the kept padding is trimmed. */
+const TRIM_THRESHOLD_DB = -50;
+const TRIM_KEEP_START_SEC = 0.25;
+const TRIM_KEEP_END_SEC = 0.35;
+
+/** Absolute path of a recorded line's source asset; throws a user-facing error when it is missing. */
+function recordingFile(projectId: string, sourcePath: string | undefined): string {
+  if (!sourcePath) throw new Error("録音ファイルがありません (voice.sourcePath is not set)");
+  const parts = sourcePath.split("/");
+  if (parts.some((p) => p === ".." || p === "") || /^[a-zA-Z]:/.test(sourcePath) || sourcePath.includes("\\")) {
+    throw new Error(`録音ファイルのパスが不正です: ${sourcePath}`);
+  }
+  const file = path.join(projectDir(projectId), ...parts);
+  if (!fs.existsSync(file)) throw new Error(`録音ファイルがありません: ${sourcePath}`);
+  return file;
+}
+
+type Converted = Omit<LineSynthesis, "audioPath">;
+
+/** Below this peak (before normalization) the recording is treated as silence (whisper would hallucinate). */
+const QUIET_PEAK_DB = -45;
+/** With script text, at least this fraction of its characters must appear in the transcript. */
+const MIN_SCRIPT_MATCH = 0.3;
+
+/** Throws (-> warning + fallback captions) when the whisper result is unusable. */
+function checkTranscript(text: string, transcript: string): void {
+  if (!transcript.trim() || isLikelyHallucination(transcript)) {
+    throw new Error(`whisper found no speech${transcript.trim() ? ` (ignored "${transcript.trim().slice(0, 40)}")` : ""}`);
+  }
+  if (text) {
+    const r = scriptMatchRatio(text, transcript);
+    if (r < MIN_SCRIPT_MATCH) {
+      throw new Error(`the transcript does not match the text (${Math.round(r * 100)} % match): "${transcript.trim().slice(0, 60)}"`);
+    }
+  }
+}
+
+/**
+ * Converts voice.sourcePath into `out` (PCM s16 WAV, mono, 48 kHz, long leading/trailing silence trimmed,
+ * peak -3 dBFS) and builds captions with whisper (en: config.whisper.model, ja: config.whisper.multilingualModel).
+ * Problems with whisper are non-fatal (warning); a missing/undecodable recording throws.
+ */
+async function convertRecording(projectId: string, line: Pick<ScriptLine, "id" | "text" | "voice" | "lang">, out: string): Promise<Converted> {
+  const src = recordingFile(projectId, line.voice.sourcePath);
+  return withTmpDir(async (tmp) => {
+    const warnings: string[] = [];
+    const base = ["-hide_banner", "-nostdin", "-y", "-i", src, "-vn", "-ac", "1", "-ar", String(RECORDED_SAMPLE_RATE)];
+    const raw = path.join(tmp, "rec-raw.wav");
+    await runOk("ffmpeg", [...base, "-c:a", "pcm_f32le", raw], "Converting the recording", { timeoutMs: 120_000 });
+    const rawDur = await audioDuration(raw).catch(() => 0);
+    if (!(rawDur > 0)) throw new Error("録音ファイルに音声がありません (no audio decoded)");
+
+    // trim long silence at both ends (areverse trick for the tail); fall back to the untrimmed audio
+    const trimmed = path.join(tmp, "rec-trim.wav");
+    const sr = (keep: number) =>
+      `silenceremove=start_periods=1:start_duration=0:start_threshold=${TRIM_THRESHOLD_DB}dB:start_silence=${keep}`;
+    let pre = raw;
+    try {
+      await runOk(
+        "ffmpeg",
+        ["-hide_banner", "-nostdin", "-y", "-i", raw, "-af", `${sr(TRIM_KEEP_START_SEC)},areverse,${sr(TRIM_KEEP_END_SEC)},areverse`, "-c:a", "pcm_f32le", trimmed],
+        "Trimming silence",
+        { timeoutMs: 120_000 },
+      );
+      if ((await audioDuration(trimmed)) >= 0.3) pre = trimmed;
+    } catch (e) {
+      console.warn(`[tts] ${line.id}: silence trim failed, using the untrimmed recording: ${(e as Error).message}`);
+    }
+
+    const peak = await peakDb(pre);
+    const tooQuiet = !Number.isFinite(peak) || peak < QUIET_PEAK_DB;
+    await normalizePeak(pre, out, -3);
+    const durationSec = await audioDuration(out);
+
+    let captions: Caption[];
+    const text = line.text.trim();
+    try {
+      if (tooQuiet) throw new Error(`録音がほぼ無音です (peak ${Number.isFinite(peak) ? peak.toFixed(1) : "-inf"} dBFS)`);
+      const w16 = path.join(tmp, "w16k.wav");
+      await toWhisperWav(out, w16);
+      let transcript: string;
+      if (line.lang === "ja") {
+        const segs: TimedSegment[] = await whisperJaSegments(w16);
+        transcript = segs.map((s) => s.text).join(" ");
+        checkTranscript(text, transcript);
+        captions = buildRecordedJaCaptions(text, durationSec, segs);
+      } else {
+        const words: WordTiming[] = await whisperWords(w16);
+        transcript = words.map((w) => w.text).join(" ");
+        checkTranscript(text, transcript);
+        captions = buildEnCaptions(text || transcript, durationSec, words);
+      }
+    } catch (e) {
+      const msg = (e as Error).message.slice(0, 300);
+      captions = line.lang === "ja" ? buildRecordedJaCaptions(text, durationSec, null) : buildEnCaptions(text, durationSec, null);
+      warnings.push(
+        text
+          ? `字幕のタイミングを取得できませんでした(文字数で比例配分): ${msg}`
+          : `字幕を作成できませんでした(テキストが空): ${msg}`,
+      );
+    }
+    for (const w of warnings) console.warn(`[tts] ${line.id}: ${w}`);
+    const res: Converted = { durationSec, captions };
+    if (warnings.length) res.warning = warnings.join(" / ");
+    return res;
+  });
+}
+
 /**
  * Synthesizes one line into projects/<id>/tts/<lineId>.wav (overwrite) and computes its captions.
+ * v3: "recorded" lines are converted from voice.sourcePath instead (no credit).
  * Runs outside the project lock; the caller stores the result with updateProject.
  */
 export async function synthesizeLine(projectId: string, line: Pick<ScriptLine, "id" | "text" | "voice" | "lang">): Promise<LineSynthesis> {
@@ -73,6 +188,11 @@ export async function synthesizeLine(projectId: string, line: Pick<ScriptLine, "
   const tmpOut = path.join(ttsDir, `.${line.id}.${nanoid(6)}.tmp.wav`);
   const text = line.text.trim();
   try {
+    if (line.voice.engine === "recorded") {
+      const r = await convertRecording(projectId, line, tmpOut);
+      await replaceFile(tmpOut, dest);
+      return { audioPath: rel, ...r };
+    }
     if (line.voice.engine === "voicevox") {
       const credit = await voicevoxCredit(line.voice.speaker);
       const { query, wav } = await voicevoxSynthesize(text, line.voice.speaker, line.voice.speed);
@@ -113,6 +233,7 @@ export async function synthesizeLine(projectId: string, line: Pick<ScriptLine, "
 
 /** WAV bytes for a preview (nothing stored, no captions). */
 export async function previewWav(voice: Voice, text: string): Promise<Buffer> {
+  if (voice.engine === "recorded") throw new InvalidVoiceError("Preview is only available for TTS engines (not recorded lines)");
   if (voice.engine === "voicevox") {
     await voicevoxCredit(voice.speaker); // validates the style id (InvalidVoiceError)
     const { wav } = await voicevoxSynthesize(text.trim(), voice.speaker, voice.speed);

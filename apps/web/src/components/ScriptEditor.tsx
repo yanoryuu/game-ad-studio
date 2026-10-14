@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  createRecordedVoice,
   createScriptLine,
+  DEFAULT_VOICES,
   DEFAULT_VOICEVOX_SPEAKER,
+  hasNarrationInput,
+  type FeatureItem,
+  type TemplateId,
   type Caption,
   type Lang,
   type Project,
@@ -12,11 +17,11 @@ import {
   type Voice,
 } from "@gas/shared";
 import { assetUrl, buildNarrationPlan } from "@gas/compositions";
-import { api, featureErrorMessage } from "../api";
+import { api, errorMessage, featureErrorMessage } from "../api";
 import { mainTargetSec } from "../autoArrange";
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { reloadVoices, useAudioPlayer, useRequiredCredits, useTtsStatus, useTtsVoices, type TtsStatusState } from "../hooks/useTts";
-import { clamp, cx, formatSec, round2 } from "../util";
+import { basename, clamp, cx, formatSec, round2 } from "../util";
 import { Banner, Icon, Section, Segmented, Spinner } from "./ui";
 
 const ENGINE: Record<Lang, TtsEngine> = { ja: "voicevox", en: "piper" };
@@ -27,6 +32,21 @@ const SECTIONS: { id: ScriptSectionId; label: string; hint: string; offsetLabel:
   { id: "cta", label: "エンド", hint: "エンドカードで流れる呼びかけ。エンドカード開始から offset 秒後。", offsetLabel: "開始" },
 ];
 
+/** Per-template wording of the script sections (ARCHITECTURE §5.5 / §5.6). */
+const SECTION_TEXT: Partial<Record<TemplateId, Partial<Record<ScriptSectionId, { label: string; hint: string }>>>> = {
+  features: {
+    hook: { label: "タイトル", hint: "冒頭のタイトルで流れる一言。タイトル開始から offset 秒後に再生。" },
+    main: { label: "魅力", hint: "行ごとに魅力を選ぶとその魅力の頭から順に再生。「全体」の行は最初の魅力から続けて再生。" },
+  },
+  trailer: {
+    hook: { label: "冒頭", hint: "動画の頭(0 秒)から offset 秒後に再生。" },
+    main: { label: "本編", hint: "冒頭の行の後から順に連続で再生(ロゴ演出の前まで)。" },
+  },
+};
+const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥"];
+const AUDIO_ACCEPT = ".mp3,.wav,.m4a,.ogg,.aac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/ogg,audio/aac";
+const AUDIO_EXT = /.(mp3|wav|m4a|ogg|aac)$/i;
+
 const STATUS_LABEL: Record<ScriptLine["status"], string> = {
   none: "未生成",
   ok: "生成済み",
@@ -34,7 +54,7 @@ const STATUS_LABEL: Record<ScriptLine["status"], string> = {
   error: "エラー",
 };
 
-const needsSynth = (l: ScriptLine) => l.text.trim() !== "" && l.status !== "ok";
+const needsSynth = (l: ScriptLine) => hasNarrationInput(l) && l.status !== "ok";
 
 export function ScriptEditor(props: {
   project: Project;
@@ -91,11 +111,49 @@ export function ScriptEditor(props: {
       }),
     }));
   const setVoice = (l: ScriptLine, v: Partial<Voice>) => patchLine(l.id, { voice: { ...l.voice, ...v, engine } }, true);
+  /** 合成音声 <-> 録音. Switching back to TTS reuses the last TTS voice of this language. */
+  const setEngineKind = (l: ScriptLine, kind: "tts" | "recorded") => {
+    if ((l.voice.engine === "recorded") === (kind === "recorded")) return;
+    if (kind === "recorded") return patchLine(l.id, { voice: createRecordedVoice() }, true);
+    const prev = [...project.script].reverse().find((x) => x.lang === lang && x.voice.engine === engine)?.voice;
+    patchLine(l.id, { voice: prev ? { ...prev } : { ...DEFAULT_VOICES[lang] } }, true);
+  };
+  const [uploading, setUploading] = useState<string | null>(null);
+  const uploadRecording = async (l: ScriptLine, file: File | undefined) => {
+    if (!file) return;
+    if (!AUDIO_EXT.test(file.name)) {
+      setLineMsg((m) => ({ ...m, [l.id]: "mp3 / wav / m4a / ogg / aac のファイルを選んでください" }));
+      return;
+    }
+    setUploading(l.id);
+    setLineMsg((m) => ({ ...m, [l.id]: "" }));
+    try {
+      const res = await api.uploadAsset(project.id, file);
+      setRecName((n) => ({ ...n, [res.path]: file.name }));
+      patchLine(l.id, { voice: createRecordedVoice(res.path) }, true);
+    } catch (e) {
+      setLineMsg((m) => ({ ...m, [l.id]: `アップロードできません: ${errorMessage(e)}` }));
+    } finally {
+      setUploading(null);
+    }
+  };
+  const [recName, setRecName] = useState<Record<string, string>>({});
+  const setFeature = (l: ScriptLine, featureId: string) =>
+    update((p) => ({
+      ...p,
+      script: p.script.map((x) => {
+        if (x.id !== l.id) return x;
+        if (featureId) return { ...x, featureId };
+        const { featureId: _omit, ...rest } = x;
+        return rest;
+      }),
+    }));
+  const featureItems = project.template === "features" ? project.templateData.features.items : [];
 
   const addLine = (section: ScriptSectionId) =>
     update((p) => {
       const same = p.script.filter((l) => l.lang === lang && l.section === section);
-      const prevVoice = (same[same.length - 1] ?? p.script.filter((l) => l.lang === lang).at(-1))?.voice;
+      const prevVoice = [...same, ...p.script.filter((l) => l.lang === lang)].reverse().find((l) => l.voice.engine === engine)?.voice;
       const line = createScriptLine(lang, section);
       if (prevVoice && prevVoice.engine === engine) line.voice = { ...prevVoice };
       const lastIdx = same.length ? p.script.indexOf(same[same.length - 1]!) : -1;
@@ -146,12 +204,17 @@ export function ScriptEditor(props: {
 
   const preview = async (l: ScriptLine) => {
     if (player.playingId === `pv:${l.id}`) return player.stop();
+    if (l.voice.engine === "recorded") {
+      // the recording itself (nothing to synthesize)
+      if (l.voice.sourcePath) player.play(`pv:${l.id}`, assetUrl("", project.id, l.voice.sourcePath));
+      return;
+    }
     const text = l.text.trim().slice(0, 500);
     if (!text) return;
     setPreviewing(l.id);
     setLineMsg((m) => ({ ...m, [l.id]: "" }));
     try {
-      const blob = await api.ttsPreview({ engine, speaker: l.voice.speaker, speed: l.voice.speed, text });
+      const blob = await api.ttsPreview({ engine: l.voice.engine === "piper" ? "piper" : "voicevox", speaker: l.voice.speaker, speed: l.voice.speed, text });
       player.play(`pv:${l.id}`, blob);
     } catch (e) {
       setLineMsg((m) => ({ ...m, [l.id]: `試聴できません: ${featureErrorMessage(e, "TTS")}` }));
@@ -215,8 +278,11 @@ export function ScriptEditor(props: {
         ) : null}
       </div>
 
-      {SECTIONS.map((sec) => {
+      {SECTIONS.map((base) => {
+        const sec = { ...base, ...SECTION_TEXT[project.template]?.[base.id] };
         const lines = langLines.filter((l) => l.section === sec.id);
+        const featIds = new Set(featureItems.map((f) => f.id));
+        const boundN = sec.id === "main" ? lines.filter((l) => l.featureId && featIds.has(l.featureId)).length : 0;
         const speech = lines.reduce((s, l) => s + (l.durationSec ?? 0) + (sec.id === "main" ? l.offsetSec : 0), 0);
         return (
           <Section
@@ -233,6 +299,9 @@ export function ScriptEditor(props: {
             }
           >
             {lines.length === 0 ? <div className="field-hint">{sec.hint}</div> : null}
+            {boundN > 0 && boundN < lines.length ? (
+              <div className="field-hint warn">「全体」の行と魅力に紐付けた行が混在しています。全体の行は最初の魅力から続けて流れるため、重なることがあります。</div>
+            ) : null}
             <ol className="lines">
               {lines.map((l, k) => (
                 <LineCard
@@ -259,6 +328,12 @@ export function ScriptEditor(props: {
                   onPreview={() => void preview(l)}
                   onPlay={() => playAudio(l)}
                   onRegenerate={() => void synthesize([l.id])}
+                  onEngineKind={(k) => setEngineKind(l, k)}
+                  onUpload={(f) => void uploadRecording(l, f)}
+                  uploading={uploading === l.id}
+                  recordingName={l.voice.sourcePath ? recName[l.voice.sourcePath] ?? basename(l.voice.sourcePath) : null}
+                  features={sec.id === "main" ? featureItems : []}
+                  onFeature={(id) => setFeature(l, id)}
                 />
               ))}
             </ol>
@@ -330,6 +405,18 @@ function TtsStatusBar(props: { state: TtsStatusState; lang: Lang; onRecheck: () 
       >
         <span className="dot" /> Whisper <em>{s.whisper.ok ? s.whisper.model : "なし"}</em>
       </span>
+      {s.whisper.multilingual ? (
+        <span
+          className={cx("eng", s.whisper.multilingual.ok ? "is-ok" : "is-idle")}
+          title={
+            s.whisper.multilingual.ok
+              ? "日本語の録音ナレーションの書き起こしに使用"
+              : `${s.whisper.multilingual.error ?? "未導入"} — 初回使用時にダウンロードされます`
+          }
+        >
+          <span className="dot" /> 多言語 <em>{s.whisper.multilingual.model}</em>
+        </span>
+      ) : null}
       <button className="btn btn-sm btn-ghost btn-icon" onClick={props.onRecheck} title="再確認" aria-label="エンジン状態を再確認">
         <Icon.Refresh size={13} />
       </button>
@@ -365,23 +452,36 @@ function LineCard(props: {
   onPreview: () => void;
   onPlay: () => void;
   onRegenerate: () => void;
+  onEngineKind: (k: "tts" | "recorded") => void;
+  onUpload: (f: File | undefined) => void;
+  uploading: boolean;
+  recordingName: string | null;
+  /** features template, main section: the items a line can be bound to ([] = no selector) */
+  features: FeatureItem[];
+  onFeature: (id: string) => void;
 }) {
   const { line: l, engine, voices } = props;
   const [showCaps, setShowCaps] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const recorded = l.voice.engine === "recorded";
   const entry = voices.entry;
   const list: TtsVoice[] = entry.kind === "ok" ? entry.voices.filter((v) => v.engine === engine) : [];
   const known = list.some((v) => v.speaker === l.voice.speaker);
   const hasText = l.text.trim() !== "";
+  const hasInput = hasNarrationInput(l);
   const previewOn = props.playing === `pv:${l.id}`;
   const playOn = props.playing === `au:${l.id}`;
+  const transcript =
+    recorded && !hasText && l.captions.length > 0 ? l.captions.map((c) => c.text).join(l.lang === "ja" ? "" : " ") : null;
+  const boundId = l.featureId && props.features.some((f) => f.id === l.featureId) ? l.featureId : "";
 
   return (
-    <li className={cx("line", `is-${l.status}`, props.overflow && "is-overflow", props.busy && "is-busy")}>
+    <li className={cx("line", `is-${l.status}`, props.overflow && "is-overflow", props.busy && "is-busy", recorded && "is-recorded")}>
       <div className="line-head">
         <span className="line-idx mono">{props.index + 1}</span>
         {props.busy ? (
           <span className="lstatus is-busy">
-            <Spinner size={9} /> 生成中
+            <Spinner size={9} /> {recorded ? "変換中" : "生成中"}
           </span>
         ) : (
           <span className={cx("lstatus", `is-${l.status}`)} title={l.error}>
@@ -397,9 +497,9 @@ function LineCard(props: {
         <span className="line-actions">
           <button
             className={cx("btn btn-icon btn-ghost", previewOn && "is-on")}
-            title={previewOn ? "停止" : "試聴(保存しない)"}
+            title={previewOn ? "停止" : recorded ? "録音ファイルを再生" : "試聴(保存しない)"}
             aria-label="試聴"
-            disabled={!hasText || props.previewing || !props.serverOk}
+            disabled={recorded ? !l.voice.sourcePath : !hasText || props.previewing || !props.serverOk}
             onClick={props.onPreview}
           >
             {props.previewing ? <Spinner size={11} /> : previewOn ? <Icon.Stop size={12} /> : <Icon.Speaker size={14} />}
@@ -415,9 +515,9 @@ function LineCard(props: {
           </button>
           <button
             className="btn btn-icon btn-ghost"
-            title="この行を再生成"
+            title={recorded ? "この行を変換+書き起こし" : "この行を再生成"}
             aria-label="この行を再生成"
-            disabled={!hasText || props.busy || !props.serverOk}
+            disabled={!hasInput || props.busy || !props.serverOk}
             onClick={props.onRegenerate}
           >
             <Icon.Refresh size={13} />
@@ -440,46 +540,121 @@ function LineCard(props: {
         </span>
       </div>
 
+      <div className="line-meta">
+        <Segmented<"tts" | "recorded">
+          size="sm"
+          value={recorded ? "recorded" : "tts"}
+          onChange={props.onEngineKind}
+          ariaLabel="音声の種類"
+          options={[
+            { value: "tts", label: "合成音声", title: engine === "voicevox" ? "VOICEVOX" : "Piper" },
+            { value: "recorded", label: "録音", title: "録音した音声ファイルを使う" },
+          ]}
+        />
+        {props.features.length > 0 ? (
+          <select
+            className={cx("input input-sm line-feat", !boundId && "is-auto")}
+            value={boundId}
+            onChange={(e) => props.onFeature(e.target.value)}
+            title="この行を流す魅力(全体 = 最初の魅力から続けて再生)"
+            aria-label="この行を流す魅力"
+          >
+            <option value="">全体(順番に)</option>
+            {props.features.map((f, i) => (
+              <option key={f.id} value={f.id}>
+                魅力{CIRCLED[i]} {f.heading[l.lang] || f.heading.ja || f.heading.en}
+              </option>
+            ))}
+          </select>
+        ) : null}
+      </div>
+
       <textarea
         className="input textarea line-text"
         rows={2}
         lang={l.lang}
         value={l.text}
-        placeholder={l.lang === "ja" ? "ナレーションの台詞" : "Narration line"}
+        placeholder={
+          recorded
+            ? l.lang === "ja"
+              ? "(任意)字幕にする文言。空欄なら録音を書き起こして字幕にします"
+              : "(Optional) caption text. Empty = transcribe the recording"
+            : l.lang === "ja"
+              ? "ナレーションの台詞"
+              : "Narration line"
+        }
         onChange={(e) => props.onText(e.target.value)}
       />
+      {transcript ? (
+        <div className="transcript" lang={l.lang}>
+          <span className="transcript-tag">書き起こし</span>
+          {transcript}
+        </div>
+      ) : null}
 
-      <div className="line-controls">
-        <label className="lc lc-voice">
-          <span className="field-label">声</span>
-          <select
-            className="input input-sm"
-            value={l.voice.speaker}
-            onChange={(e) => props.onVoice({ speaker: e.target.value })}
-            title={entry.kind === "error" ? entry.message : undefined}
-          >
-            {!known ? <option value={l.voice.speaker}>{voiceLabel(engine, l.voice.speaker)}</option> : null}
-            {list.map((v) => (
-              <option key={v.speaker} value={v.speaker}>
-                {v.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="lc lc-speed" title="話速">
-          <span className="field-label">
-            速度 <span className="mono">×{l.voice.speed.toFixed(2)}</span>
-          </span>
-          <input
-            type="range"
-            min={0.5}
-            max={2}
-            step={0.05}
-            value={l.voice.speed}
-            onChange={(e) => props.onVoice({ speed: round2(Number(e.target.value)) })}
-            onDoubleClick={() => props.onVoice({ speed: 1 })}
-          />
-        </label>
+      <div className={cx("line-controls", recorded && "is-recorded")}>
+        {recorded ? (
+          <div className="lc lc-rec">
+            <span className="field-label">録音ファイル</span>
+            <div className="rec-row">
+              <button
+                className={cx("btn btn-sm rec-btn", !l.voice.sourcePath && "btn-primary")}
+                onClick={() => fileRef.current?.click()}
+                disabled={props.uploading || !props.serverOk}
+                title="mp3 / wav / m4a / ogg / aac"
+              >
+                {props.uploading ? <Spinner size={11} /> : <Icon.Upload size={13} />}
+                {l.voice.sourcePath ? "差し替え" : "ファイルを選択"}
+              </button>
+              <span className={cx("rec-name", !l.voice.sourcePath && "muted")} title={l.voice.sourcePath}>
+                {props.uploading ? "アップロード中…" : props.recordingName ?? "未選択"}
+              </span>
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept={AUDIO_ACCEPT}
+              hidden
+              onChange={(e) => {
+                props.onUpload(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+          </div>
+        ) : (
+          <>
+            <label className="lc lc-voice">
+              <span className="field-label">声</span>
+              <select
+                className="input input-sm"
+                value={l.voice.speaker}
+                onChange={(e) => props.onVoice({ speaker: e.target.value })}
+                title={entry.kind === "error" ? entry.message : undefined}
+              >
+                {!known ? <option value={l.voice.speaker}>{voiceLabel(engine, l.voice.speaker)}</option> : null}
+                {list.map((v) => (
+                  <option key={v.speaker} value={v.speaker}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="lc lc-speed" title="話速">
+              <span className="field-label">
+                速度 <span className="mono">×{l.voice.speed.toFixed(2)}</span>
+              </span>
+              <input
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.05}
+                value={l.voice.speed}
+                onChange={(e) => props.onVoice({ speed: round2(Number(e.target.value)) })}
+                onDoubleClick={() => props.onVoice({ speed: 1 })}
+              />
+            </label>
+          </>
+        )}
         <label className="lc lc-offset" title={props.offsetLabel === "間" ? "前の行との間(秒)" : "セクション開始からの遅延(秒)"}>
           <span className="field-label">{props.offsetLabel} s</span>
           <input
@@ -495,8 +670,16 @@ function LineCard(props: {
           />
         </label>
       </div>
+      {recorded && l.voice.sourcePath && l.status !== "ok" && !props.busy ? (
+        <div className="field-hint">「音声を生成」で録音を変換し、書き起こして字幕を作ります。</div>
+      ) : null}
 
       {l.status === "error" && l.error ? <div className="line-error">{l.error}</div> : null}
+      {l.warning && l.status === "ok" ? (
+        <div className="line-warning">
+          <Icon.Alert size={12} /> <span>{l.warning}</span>
+        </div>
+      ) : null}
       {props.message ? <div className="line-error">{props.message}</div> : null}
 
       {l.captions.length > 0 ? (

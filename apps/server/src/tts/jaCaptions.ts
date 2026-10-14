@@ -302,3 +302,37 @@ export function buildJaCaptions(text: string, query: VvAudioQuery, durationSec: 
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ */
+/* v3: chunking without mora information (recorded narration)           */
+/* ------------------------------------------------------------------ */
+
+/** Relative spoken length of a character (kana 1, small kana 0, kanji/digits/latin ≈ 1.8, punctuation 0). */
+export function jaCharWeight(ch: string): number {
+  const k = kindOf(ch);
+  return k === "kana" ? 1 : k === "var" ? VAR_MORA_ESTIMATE : 0;
+}
+
+export const isReadableJaChar = readable;
+
+/**
+ * Splits plain Japanese text into readable caption chunks (same rules as buildJaCaptions: cut at punctuation, long
+ * pieces split by the break-quality DP, trailing 、。 removed). `first` = index in [...text.trim()] of the chunk's
+ * first readable character (used to look up its time).
+ */
+export function chunkJaText(text: string, maxChars = JA_MAX_CHARS): { text: string; first: number }[] {
+  const chars = [...text.trim()];
+  const pos = chars.map((_, i) => i).concat(chars.length);
+  const out: { text: string; first: number }[] = [];
+  for (const [a, b] of splitAtPunct(chars)) {
+    for (const [from, to] of splitRange(chars, a, b, pos, [], maxChars)) {
+      const t = displayText(chars.slice(from, to).join(""));
+      if (!t) continue;
+      let first = from;
+      while (first < to && !readable(chars[first]!)) first++;
+      if (first >= to) continue;
+      out.push({ text: t, first });
+    }
+  }
+  return out;
+}

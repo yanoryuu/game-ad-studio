@@ -1,16 +1,10 @@
 import { useRef, useState } from "react";
-import type { DurationSec, Format, Fps, Game, Lang, Project, TemplateId } from "@gas/shared";
+import type { DurationSec, Format, Fps, Game, Lang, Project } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import { api, errorMessage } from "../api";
 import type { UpdateProject } from "../hooks/useProject";
 import { cx } from "../util";
 import { Field, Icon, Section, Segmented, Spinner } from "./ui";
-
-const TEMPLATES: { id: TemplateId; name: string; desc: string; enabled: boolean }[] = [
-  { id: "hook-play-cta", name: "王道", desc: "フック → プレイ → エンドカード", enabled: true },
-  { id: "features", name: "魅力紹介", desc: "見出し+クリップの繰り返し", enabled: false },
-  { id: "trailer", name: "トレーラー風", desc: "BGM に合わせた短いカット", enabled: false },
-];
 
 export function Inspector(props: {
   project: Project;
@@ -40,13 +34,11 @@ export function Inspector(props: {
             ariaLabel="フォーマット"
             options={[
               { value: "16:9", label: "16:9 横" },
-              { value: "9:16", label: "9:16 縦", title: "縦レイアウトの本対応は Phase 3" },
+              { value: "9:16", label: "9:16 縦" },
             ]}
           />
         </Field>
-        {props.format === "9:16" ? (
-          <div className="field-hint warn">縦型(ぼかし背景・クロップ)は Phase 3。現状は簡易レイアウトです。</div>
-        ) : null}
+        <div className="field-hint">プレビューの形式です(書き出しはプレビュー下のパネルで複数選べます)。9:16 の作り方はスタイルタブで設定します。</div>
         <div className="field-row">
           <Field label="尺">
             <Segmented<DurationSec>
@@ -74,30 +66,6 @@ export function Inspector(props: {
         </div>
       </Section>
 
-      <Section title="テンプレート">
-        <div className="tpl-list" role="radiogroup" aria-label="テンプレート">
-          {TEMPLATES.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="radio"
-              aria-checked={project.template === t.id}
-              className={cx("tpl", project.template === t.id && "is-active")}
-              disabled={!t.enabled}
-              onClick={() => update((p) => ({ ...p, template: t.id }))}
-            >
-              <TemplateGlyph id={t.id} />
-              <span className="tpl-text">
-                <span className="tpl-name">
-                  {t.name}
-                  {!t.enabled ? <span className="badge">Phase 3</span> : null}
-                </span>
-                <span className="tpl-desc">{t.desc}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </Section>
 
       <Section
         title="テキスト"
@@ -114,7 +82,17 @@ export function Inspector(props: {
           />
         }
       >
-        <Field label="フック" hint="冒頭に大きく出る一言" htmlFor="txt-hook">
+        <Field
+          label={project.template === "features" ? "キャッチコピー" : "フック"}
+          hint={
+            project.template === "trailer"
+              ? "トレーラー風では使いません(構成タブのテロップを使います)"
+              : project.template === "features"
+                ? "タイトルと一緒に冒頭に出る一言"
+                : "冒頭に大きく出る一言"
+          }
+          htmlFor="txt-hook"
+        >
           <textarea
             id="txt-hook"
             className="input textarea"
@@ -297,19 +275,3 @@ function AssetSlot(props: {
   );
 }
 
-function TemplateGlyph({ id }: { id: TemplateId }) {
-  // Tiny timeline diagram of each template's structure.
-  const blocks: [number, string][] =
-    id === "hook-play-cta"
-      ? [[2, "a"], [6, "b"], [2, "c"]]
-      : id === "features"
-        ? [[1, "c"], [2, "b"], [2, "b"], [2, "b"], [2, "c"]]
-        : [[1, "b"], [1, "a"], [1, "b"], [1, "a"], [1, "b"], [2, "c"]];
-  return (
-    <span className="tpl-glyph" aria-hidden>
-      {blocks.map(([w, k], i) => (
-        <span key={i} className={`g-${k}`} style={{ flexGrow: w }} />
-      ))}
-    </span>
-  );
-}

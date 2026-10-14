@@ -1,7 +1,7 @@
 import type React from "react";
 import { AbsoluteFill, Freeze, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig, Easing } from "remotion";
 import type { Format, Project } from "@gas/shared";
-import type { PlacedClip } from "./timeline";
+import type { PlacedClip } from "./clips";
 import { sourceUrl } from "./urls";
 import { isVertical, unitFor } from "./theme";
 import { BODY_FONT } from "./fonts";
@@ -19,7 +19,10 @@ type ClipVideoProps = {
   withAudio: boolean;
 };
 
-/** One source video, laid out for the format (16:9 cover / 9:16 contain over a blurred copy). */
+/**
+ * One source video, laid out for the format: 16:9 cover; 9:16 per style.vertical.mode —
+ * "blur" (default): contain over a blurred copy; "crop": full-bleed cover centered at clip.focusX.
+ */
 const ClipVideo: React.FC<ClipVideoProps> = ({ project, src, clip, format, absFrom, withAudio }) => {
   const env = useDuckEnvelope();
   const muted = !withAudio || !clip.hasAudio || clip.volume <= 0;
@@ -36,6 +39,13 @@ const ClipVideo: React.FC<ClipVideoProps> = ({ project, src, clip, format, absFr
     />
   );
 
+  if (isVertical(format) && project.style.vertical.mode === "crop") {
+    return (
+      <AbsoluteFill style={{ backgroundColor: "black" }}>
+        {video({ width: "100%", height: "100%", objectFit: "cover", objectPosition: `${clip.focusX * 100}% 50%` }, false)}
+      </AbsoluteFill>
+    );
+  }
   if (isVertical(format)) {
     return (
       <AbsoluteFill style={{ backgroundColor: "black" }}>

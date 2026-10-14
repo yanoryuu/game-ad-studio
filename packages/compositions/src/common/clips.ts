@@ -1,24 +1,17 @@
-import type { Clip, Lang, Project } from "@gas/shared";
-import { layoutNarration, placeSection, type NarrationPlan } from "./narrationLayout";
+import type { Clip, Project } from "@gas/shared";
 
 /**
- * Shared timeline of the "hook-play-cta" template.
- * Used by BOTH calcAdMetadata (duration) and <AdVideo> (rendering), so they can never disagree.
- * All values are integer frames at the output fps.
+ * Clip-fitting building blocks shared by all templates (pure, no React). All values are integer frames
+ * at the output fps. Moved unchanged from the Phase 2 hook-play-cta timeline.
  */
 
-export const HOOK_SEC = 2.5;
-export const END_CARD_SEC = 3;
-/** Fixed durationSec: the hook / end card may grow up to this to fit their narration (main shrinks). */
-export const MAX_HOOK_SEC = 5;
-export const MAX_END_CARD_SEC = 5;
 /** Proportional trimming never makes a main clip shorter than this; overflow clips are dropped instead. */
 export const MIN_CLIP_SEC = 0.6;
 /** Clips shorter than this (after validation) are ignored. */
 const MIN_VALID_FRAMES = 2;
 
 /** A usable piece of source material, in output frames. */
-type Segment = {
+export type Segment = {
   clipId: string;
   sourceId: string;
   /** source-time in/out converted to frames */
@@ -56,19 +49,7 @@ export type TimelineSection = {
   clips: PlacedClip[];
 };
 
-export type AdTimeline = {
-  fps: number;
-  totalFrames: number;
-  hook: TimelineSection;
-  main: TimelineSection;
-  endCard: TimelineSection;
-  /** true if the hook section re-uses the beginning of the main clips (no hook-slot clips) */
-  hookBorrowedFromMain: boolean;
-  /** narration of the requested language placed on this timeline (ARCHITECTURE §5.1) */
-  narration: NarrationPlan;
-};
-
-function toSegments(project: Project, clips: Clip[], fps: number): Segment[] {
+export function toSegments(project: Project, clips: Clip[], fps: number): Segment[] {
   const out: Segment[] = [];
   for (const c of clips) {
     const source = project.sources.find((s) => s.id === c.sourceId);
@@ -94,10 +75,10 @@ function toSegments(project: Project, clips: Clip[], fps: number): Segment[] {
   return out;
 }
 
-const segLen = (s: Segment) => s.outF - s.inF;
+export const segLen = (s: Segment) => s.outF - s.inF;
 
 /** Takes the first `frames` frames of material off the front of `segs`. */
-function consumeFrames(segs: Segment[], frames: number, minRestFrames: number): { taken: Segment[]; rest: Segment[] } {
+export function consumeFrames(segs: Segment[], frames: number, minRestFrames: number): { taken: Segment[]; rest: Segment[] } {
   const taken: Segment[] = [];
   const rest: Segment[] = [];
   let remaining = frames;
@@ -127,7 +108,7 @@ function consumeFrames(segs: Segment[], frames: number, minRestFrames: number): 
  * - Shorter than target: extends clips past outSec into the source proportionally (as far as the source
  *   allows); anything still missing is a hold on the last frame of the last clip.
  */
-function fitSegments(segs: Segment[], target: number, minFrames: number, keyPrefix: string): PlacedClip[] {
+export function fitSegments(segs: Segment[], target: number, minFrames: number, keyPrefix: string): PlacedClip[] {
   if (segs.length === 0 || target <= 0) return [];
   let list = segs.slice();
   let alloc: number[] = [];
@@ -209,64 +190,4 @@ function fitSegments(segs: Segment[], target: number, minFrames: number, keyPref
     else last.playFrames = Math.max(1, last.playFrames + diff);
   }
   return placed;
-}
-
-/**
- * @param lang narration language: with durationSec === null, sections grow so its narration fits.
- *             With a fixed durationSec, hook / end card grow to fit their narration up to
- *             MAX_HOOK_SEC / MAX_END_CARD_SEC (the main section absorbs the difference, total stays
- *             exactly durationSec); narration that still overflows its section is cut (see NarrationPlan).
- */
-export function buildTimeline(project: Project, fps: number, lang: Lang): AdTimeline {
-  const narr = layoutNarration(project, lang, fps);
-  const free = project.durationSec === null;
-  const grow = (base: number, need: number, max: number) =>
-    Math.max(Math.round(base * fps), free ? need : Math.min(need, Math.round(max * fps)));
-  // fixed durations are 15 / 30 s, so hook + end card (<= 10 s) always leave room for main
-  const hookFrames = grow(HOOK_SEC, narr.hookNeed, MAX_HOOK_SEC);
-  const endFrames = grow(END_CARD_SEC, narr.ctaNeed, MAX_END_CARD_SEC);
-  const minFrames = Math.round(MIN_CLIP_SEC * fps);
-
-  const hookSegs0 = toSegments(project, project.clips.filter((c) => c.slot === "hook"), fps);
-  let mainSegs = toSegments(project, project.clips.filter((c) => c.slot === "main"), fps);
-
-  let hookSegs = hookSegs0;
-  let hookBorrowedFromMain = false;
-  if (hookSegs.length === 0 && mainSegs.length > 0) {
-    const { taken, rest } = consumeFrames(mainSegs, hookFrames, Math.round(0.5 * fps));
-    hookSegs = taken;
-    mainSegs = rest;
-    hookBorrowedFromMain = true;
-  }
-
-  let mainFrames: number;
-  if (project.durationSec === null) {
-    // free length: natural clip length, extended (extra source material / last-frame hold) to fit the narration
-    mainFrames = Math.max(mainSegs.reduce((a, s) => a + segLen(s), 0), narr.mainNeed);
-  } else {
-    mainFrames = Math.max(0, Math.round(project.durationSec * fps) - hookFrames - endFrames);
-  }
-
-  const hookClips = fitSegments(hookSegs, hookFrames, 1, "hook");
-  const mainClips = fitSegments(mainSegs, mainFrames, minFrames, "main");
-
-  const hook: TimelineSection = { from: 0, durationInFrames: hookFrames, clips: hookClips };
-  const main: TimelineSection = { from: hookFrames, durationInFrames: mainFrames, clips: mainClips };
-  const endCard: TimelineSection = { from: hookFrames + mainFrames, durationInFrames: endFrames, clips: [] };
-
-  const lines = [
-    ...placeSection(narr.hook, "hook", hook.from, hook.durationInFrames, !free),
-    ...placeSection(narr.main, "main", main.from, main.durationInFrames, !free),
-    ...placeSection(narr.cta, "cta", endCard.from, endCard.durationInFrames, !free),
-  ];
-
-  return {
-    fps,
-    totalFrames: hookFrames + mainFrames + endFrames,
-    hook,
-    main,
-    endCard,
-    hookBorrowedFromMain,
-    narration: { lines, overflowLineIds: lines.filter((l) => l.cut).map((l) => l.lineId) },
-  };
 }

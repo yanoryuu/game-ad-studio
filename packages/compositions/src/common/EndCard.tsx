@@ -1,10 +1,10 @@
 import type React from "react";
 import { AbsoluteFill, Img, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { collectCredits, type Format, type Lang, type Project } from "@gas/shared";
-import { Backdrop } from "../Backdrop";
-import { assetUrl } from "../urls";
-import { BODY_FONT, displayFont } from "../fonts";
-import { isVertical, readableOn, unitFor, withAlpha } from "../theme";
+import { Backdrop } from "./Backdrop";
+import { assetUrl } from "./urls";
+import { BODY_FONT, displayFont } from "./fonts";
+import { isVertical, readableOn, unitFor, withAlpha } from "./theme";
 
 function useEntrance(delay: number) {
   const frame = useCurrentFrame();

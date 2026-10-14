@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { generateId, type Clip, type Format, type Lang, type Project, type Source } from "@gas/shared";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { generateId, hasNarrationInput, trailerClipOrder, type Clip, type Format, type Lang, type Project, type Source } from "@gas/shared";
+import { calcAdMetadata } from "@gas/compositions";
 import { api, ApiError } from "../api";
 import { insertClip } from "../autoArrange";
 import { useHealth } from "../hooks/useHealth";
@@ -17,10 +18,11 @@ import { ScriptEditor } from "./ScriptEditor";
 import { ServerDown } from "./ServerDown";
 import { SourcesPanel } from "./SourcesPanel";
 import { StylePanel } from "./StylePanel";
+import { TemplatePanel } from "./TemplatePanel";
 import { Banner, Empty, Icon, Spinner, Tabs } from "./ui";
 
 type LeftTab = "media" | "cands" | "script";
-type RightTab = "settings" | "audio" | "style";
+type RightTab = "settings" | "structure" | "audio" | "style";
 
 const POLL_MS = 1500;
 
@@ -55,7 +57,7 @@ export function Editor({ projectId }: { projectId: string }) {
   const [format, setFormat] = usePref<Format>(`gas:${projectId}:format`, "16:9", ["16:9", "9:16"]);
   const [lang, setLang] = usePref<Lang>(`gas:${projectId}:lang`, "ja", ["ja", "en"]);
   const [leftTab, setLeftTab] = usePref<LeftTab>(`gas:${projectId}:left`, "media", ["media", "cands", "script"]);
-  const [rightTab, setRightTab] = usePref<RightTab>(`gas:${projectId}:right`, "settings", ["settings", "audio", "style"]);
+  const [rightTab, setRightTab] = usePref<RightTab>(`gas:${projectId}:right`, "settings", ["settings", "structure", "audio", "style"]);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
   const [cue, setCue] = useState<MarkerCue | null>(null);
@@ -69,7 +71,9 @@ export function Editor({ projectId }: { projectId: string }) {
   }, [health.status, loadError, reload]);
 
   // Background work (proxy encoding / highlight analysis): poll GET and merge server-owned fields.
-  const needsPoll = !!project?.sources.some((s) => s.proxyStatus === "pending" || s.analysisStatus === "running");
+  const needsPoll =
+    !!project?.sources.some((s) => s.proxyStatus === "pending" || s.analysisStatus === "running") ||
+    project?.audio.bgm?.analysisStatus === "running";
   useEffect(() => {
     if (!needsPoll) return;
     const t = window.setInterval(() => void refreshServerOwned(), POLL_MS);
@@ -96,6 +100,16 @@ export function Editor({ projectId }: { projectId: string }) {
       update((p) => ({ ...p, clips: p.clips.map((c) => (c.id === clipId ? { ...c, ...patch } : c)) })),
     [update],
   );
+
+  const videoSec = useMemo(() => {
+    if (!project) return 0;
+    try {
+      const m = calcAdMetadata(project, format, lang);
+      return m.durationInFrames / m.fps;
+    } catch {
+      return 0;
+    }
+  }, [project, format, lang]);
 
   if (store.loading && !project) {
     return (
@@ -163,6 +177,11 @@ export function Editor({ projectId }: { projectId: string }) {
 
   const analyzing = project.sources.some((s) => s.analysisStatus === "running");
 
+  const openClips = () => {
+    setLeftTab("media");
+    window.setTimeout(() => document.querySelector(".clips-section")?.scrollIntoView({ block: "start", behavior: "smooth" }), 50);
+  };
+
   return (
     <div className="editor">
       <header className="topbar">
@@ -183,7 +202,7 @@ export function Editor({ projectId }: { projectId: string }) {
         <SavePill state={saveState} error={saveError} onRetry={() => void flush()} />
         <div className="topbar-right">
           {needsPoll ? (
-            <span className="pill pill-busy" title="プロキシ生成 / ハイライト解析を実行中">
+            <span className="pill pill-busy" title="プロキシ生成 / ハイライト解析 / ビート解析を実行中">
               <Spinner size={10} /> バックグラウンド処理中
             </span>
           ) : null}
@@ -256,10 +275,13 @@ export function Editor({ projectId }: { projectId: string }) {
                       project={project}
                       source={markerSource}
                       editingClip={editingClip}
-                      editingIndex={editingClip ? project.clips.filter((c) => c.slot === editingClip.slot).indexOf(editingClip) : -1}
+                      editingIndex={editingIndexOf(project, editingClip)}
                       onAdd={addClip}
                       onUpdate={updateClip}
                       onDoneEditing={() => setEditingClipId(null)}
+                      cropMode={project.style.vertical?.mode === "crop"}
+                      previewVertical={format === "9:16"}
+                      onShowVertical={() => setFormat("9:16")}
                     />
                   ) : (
                     <SourceNotReady source={markerSource} />
@@ -365,7 +387,7 @@ export function Editor({ projectId }: { projectId: string }) {
 
         <main className="pane pane-center">
           <PreviewPane project={project} format={format} lang={lang} />
-          <RenderPanel project={project} format={format} lang={lang} flush={flush} serverOk={serverOk} />
+          <RenderPanel project={project} update={update} flush={flush} serverOk={serverOk} />
         </main>
 
         <aside className="pane pane-right pane-tabbed">
@@ -375,6 +397,7 @@ export function Editor({ projectId }: { projectId: string }) {
             onChange={setRightTab}
             options={[
               { value: "settings", label: "設定" },
+              { value: "structure", label: "構成", badge: structureBadge(project) },
               { value: "audio", label: "音声", badge: project.audio.bgm ? "BGM" : null },
               { value: "style", label: "スタイル" },
             ]}
@@ -382,10 +405,21 @@ export function Editor({ projectId }: { projectId: string }) {
           <div className="pane-scroll">
             {rightTab === "settings" ? (
               <Inspector project={project} update={update} format={format} setFormat={setFormat} lang={lang} setLang={setLang} />
+            ) : rightTab === "structure" ? (
+              <TemplatePanel
+                project={project}
+                update={update}
+                mutateOnServer={mutateOnServer}
+                lang={lang}
+                setLang={setLang}
+                serverOk={serverOk}
+                onOpenAudio={() => setRightTab("audio")}
+                onOpenClips={openClips}
+              />
             ) : rightTab === "audio" ? (
-              <AudioPanel project={project} update={update} />
+              <AudioPanel project={project} update={update} mutateOnServer={mutateOnServer} serverOk={serverOk} videoSec={videoSec} />
             ) : (
-              <StylePanel project={project} update={update} />
+              <StylePanel project={project} update={update} format={format} setFormat={setFormat} onOpenClips={openClips} />
             )}
           </div>
         </aside>
@@ -395,12 +429,30 @@ export function Editor({ projectId }: { projectId: string }) {
 }
 
 function scriptBadge(project: Project, lang: Lang) {
-  const n = project.script.filter((l) => l.lang === lang && l.text.trim() && l.status !== "ok").length;
+  const n = project.script.filter((l) => l.lang === lang && hasNarrationInput(l) && l.status !== "ok").length;
   return n > 0 ? (
     <span className="tab-badge-warn" title="未生成・要再生成の行">
       {n}
     </span>
   ) : null;
+}
+
+/** Index shown in the clip marker ("クリップ N"): position in the slot, or the cut number for the trailer. */
+function editingIndexOf(project: Project, clip: Clip | null): number {
+  if (!clip) return -1;
+  if (project.template === "trailer") return trailerClipOrder(project).indexOf(clip);
+  return project.clips.filter((c) => c.slot === clip.slot).indexOf(clip);
+}
+
+/** Warning badge on the 構成 tab: trailer beat sync without beats. */
+function structureBadge(project: Project) {
+  if (project.template !== "trailer" || !project.templateData.trailer.beatSync) return null;
+  if ((project.audio.bgm?.beats?.length ?? 0) >= 2) return null;
+  return (
+    <span className="tab-badge-warn" title="ビート同期に BGM のビート解析が必要です">
+      !
+    </span>
+  );
 }
 
 function SourceNotReady({ source }: { source: Source }) {

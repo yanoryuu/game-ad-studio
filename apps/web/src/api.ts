@@ -6,7 +6,10 @@ import type {
   HealthResponse,
   Project,
   ProjectSummary,
+  RenderBatchRequest,
+  RenderBatchResponse,
   RenderJob,
+  RenderListResponse,
   RenderRequest,
   RenderStartResponse,
   TtsEngine,
@@ -85,6 +88,13 @@ export const api = {
   startRender: (id: string, body: RenderRequest) =>
     request<RenderStartResponse>("POST", `/api/projects/${encodeURIComponent(id)}/render`, body),
   getRenderJob: (jobId: string) => request<RenderJob>("GET", `/api/render/${encodeURIComponent(jobId)}`),
+
+  /* ---- Phase 3 ---- */
+  renderBatch: (id: string, body: RenderBatchRequest) =>
+    request<RenderBatchResponse>("POST", `/api/projects/${encodeURIComponent(id)}/render-batch`, body),
+  listRenders: (id: string) => request<RenderListResponse>("GET", `/api/projects/${encodeURIComponent(id)}/renders`),
+  /** 202 Project (audio.bgm.analysisStatus "running"); 409 when there is no BGM / already running. */
+  analyzeBgm: (id: string) => request<Project>("POST", `/api/projects/${encodeURIComponent(id)}/bgm/analyze`),
 
   /* ---- Phase 2 ---- */
   /** 202 Project (analysisStatus "running"); 409 when busy / proxy not ready. */

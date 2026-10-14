@@ -1,11 +1,11 @@
 import type React from "react";
 import { AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import type { Format, Lang, Project } from "@gas/shared";
-import type { TimelineSection } from "../timeline";
-import { ClipTrack } from "../ClipTrack";
-import { Backdrop } from "../Backdrop";
-import { displayFont } from "../fonts";
-import { isVertical, readableOn, unitFor } from "../theme";
+import type { TimelineSection } from "../../common/clips";
+import { ClipTrack } from "../../common/ClipTrack";
+import { Backdrop } from "../../common/Backdrop";
+import { displayFont } from "../../common/fonts";
+import { isVertical, readableOn, unitFor } from "../../common/theme";
 
 /** Rough per-character width (in em) used to auto-fit the hook text. */
 function estimateEm(text: string, lang: Lang): number {

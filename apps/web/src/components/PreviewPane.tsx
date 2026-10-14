@@ -24,11 +24,14 @@ export function PreviewPane(props: { project: Project; format: Format; lang: Lan
     w = h * ar;
   }
 
-  // Hook / end card stretch to fit their narration (docs/ARCHITECTURE.md §5.1).
-  const { hookSec, mainSec, endSec, totalSec } = useMemo(
-    () => getSectionDurations(project, lang),
-    [project, lang],
-  );
+  // Generic structure of any template (docs/ARCHITECTURE.md §5, getSectionDurations().sections).
+  const { sections, totalSec } = useMemo(() => {
+    try {
+      return getSectionDurations(project, lang);
+    } catch {
+      return { sections: [], totalSec: meta.durationInFrames / meta.fps };
+    }
+  }, [project, lang, meta]);
 
   return (
     <div className="preview">
@@ -58,15 +61,17 @@ export function PreviewPane(props: { project: Project; format: Format; lang: Lan
       </div>
       <div className="structure" aria-label="構成">
         <div className="structure-bar">
-          <span className="st st-hook" style={{ flexGrow: hookSec }}>
-            <b>フック</b> {formatSec(hookSec)}
-          </span>
-          <span className="st st-main" style={{ flexGrow: Math.max(mainSec, 1.5) }}>
-            <b>本編</b> {formatSec(mainSec)}
-          </span>
-          <span className="st st-end" style={{ flexGrow: endSec }}>
-            <b>エンド</b> {formatSec(endSec)}
-          </span>
+          {sections.map((sec) => (
+            <span
+              key={sec.id}
+              className={`st st-${sec.kind}`}
+              style={{ flexGrow: Math.max(sec.sec, 0.001), flexBasis: 0 }}
+              title={`${sec.label} · ${formatSec(sec.sec)}`}
+            >
+              <b>{sec.label}</b>
+              <span className="st-sec">{formatSec(sec.sec)}</span>
+            </span>
+          ))}
         </div>
         <div className="structure-meta mono">
           {meta.width}×{meta.height} · {meta.fps}fps · 計 {formatSec(totalSec)}

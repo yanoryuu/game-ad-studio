@@ -30,6 +30,11 @@ export type GasConfig = {
     dir: string;
     /** whisper model name, e.g. "base.en" (downloadWhisperModel({ model, folder: dir })) */
     model: string;
+    /**
+     * v3: multilingual whisper model (no ".en" suffix) used to transcribe recorded JAPANESE narration
+     * (language "ja"). Default "small" (downloaded on first use into `dir`). English recordings use `model`.
+     */
+    multilingualModel: string;
   };
 };
 
@@ -39,7 +44,7 @@ export const VOICEVOX_SEARCH_ROOT = "D:\\Tools\\voicevox";
 export const DEFAULT_CONFIG: GasConfig = {
   voicevox: { url: DEFAULT_VOICEVOX_URL },
   piper: { exePath: "D:\\Tools\\piper\\piper.exe", voicesDir: "D:\\Tools\\piper\\voices" },
-  whisper: { dir: "D:\\Tools\\whisper", model: "base.en" },
+  whisper: { dir: "D:\\Tools\\whisper", model: "base.en", multilingualModel: "small" },
 };
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -64,6 +69,7 @@ function loadConfig(): GasConfig {
     whisper: {
       dir: str(user.whisper?.dir, DEFAULT_CONFIG.whisper.dir),
       model: str(user.whisper?.model, DEFAULT_CONFIG.whisper.model),
+      multilingualModel: str(user.whisper?.multilingualModel, DEFAULT_CONFIG.whisper.multilingualModel),
     },
   };
   const enginePath = user.voicevox?.enginePath;

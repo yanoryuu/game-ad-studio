@@ -184,6 +184,7 @@ export const Icon = {
   Plus: ({ size }: IconProps) => svg(<path d="M8 3v10M3 8h10" />, size),
   Up: ({ size }: IconProps) => svg(<path d="M4 10l4-4 4 4" />, size),
   Down: ({ size }: IconProps) => svg(<path d="M4 6l4 4 4-4" />, size),
+  Next: ({ size }: IconProps) => svg(<path d="M6 4l4 4-4 4" />, size),
   Trash: ({ size }: IconProps) =>
     svg(<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" />, size),
   Edit: ({ size }: IconProps) => svg(<path d="M10.5 2.5l3 3L6 13H3v-3z" />, size),
@@ -250,6 +251,17 @@ export const Icon = {
   Stop: ({ size }: IconProps) => svg(<rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" />, size),
   Refresh: ({ size }: IconProps) => svg(<path d="M13 3v3.5H9.5M3 13V9.5h3.5M12.6 6.5A5 5 0 004 5M3.4 9.5A5 5 0 0012 11" />, size),
   Close: ({ size }: IconProps) => svg(<path d="M4 4l8 8M12 4l-8 8" />, size),
+  Pulse: ({ size }: IconProps) => svg(<path d="M1.5 8h2.5l1.5-4 2.5 8 2-6 1 2h3.5" />, size),
+  Copy: ({ size }: IconProps) =>
+    svg(
+      <>
+        <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+        <path d="M10.5 5.5V3.8A1.3 1.3 0 009.2 2.5H3.8a1.3 1.3 0 00-1.3 1.3v5.4a1.3 1.3 0 001.3 1.3h1.7" />
+      </>,
+      size,
+    ),
+  Upload: ({ size }: IconProps) => svg(<path d="M8 11V2.8M4.8 5.8L8 2.6l3.2 3.2M2.8 10.5v2.7h10.4v-2.7" />, size),
+  Crop: ({ size }: IconProps) => svg(<path d="M4 1.5V12h10.5M1.5 4H12v10.5" />, size),
   Caption: ({ size }: IconProps) =>
     svg(
       <>

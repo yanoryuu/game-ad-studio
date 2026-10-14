@@ -1,14 +1,15 @@
 {
   "voicevox": {
     "url": "http://127.0.0.1:50021",
-    "enginePath": "D:\Tools\voicevox\windows-cpu\run.exe"
+    "enginePath": "D:\\Tools\\voicevox\\windows-cpu\\run.exe"
   },
   "piper": {
-    "exePath": "D:\Tools\piper\piper.exe",
-    "voicesDir": "D:\Tools\piper\voices"
+    "exePath": "D:\\Tools\\piper\\piper.exe",
+    "voicesDir": "D:\\Tools\\piper\\voices"
   },
   "whisper": {
-    "dir": "D:\Tools\whisper",
-    "model": "base.en"
+    "dir": "D:\\Tools\\whisper",
+    "model": "base.en",
+    "multilingualModel": "small"
   }
 }

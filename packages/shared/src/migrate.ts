@@ -3,6 +3,7 @@ import {
   DEFAULT_STYLE,
   DEFAULT_VOICES,
   PROJECT_SCHEMA_VERSION,
+  createDefaultTemplateData,
   langSchema,
   projectSchema,
   type Lang,
@@ -25,6 +26,12 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
  *  - script: v1 entries ({ voice: { speakerId } }) are converted to v2 lines with status "none" (audio dropped)
  *  - bgm (top level) -> audio.bgm (+ loop: true); audio gets narrationVolume / gameVolumeUnderNarration defaults
  *  - style: + watermark { position "top-right", scale 1 }, + captions { enabled, "bottom", "m" }
+ *
+ * v2 -> v3 (Phase 3):
+ *  - templateData: added with createDefaultTemplateData() (3 feature items, 2 trailer cards, beatSync/logoReveal on)
+ *  - style.vertical: added { mode: "blur" }
+ *  - everything else is additive + optional (clip.featureId, line.featureId/warning, voice.sourcePath,
+ *    bgm.beats/bpm/analysisStatus/analysisError) -> nothing to convert
  */
 export function migrateProject(raw: unknown): Project {
   if (!isObj(raw)) throw new Error("project.json is not an object");
@@ -34,7 +41,17 @@ export function migrateProject(raw: unknown): Project {
   }
   let p: Obj = structuredClone(raw);
   if (version < 2) p = v1ToV2(p);
+  if (version < 3) p = v2ToV3(p);
   return projectSchema.parse(p);
+}
+
+function v2ToV3(p: Obj): Obj {
+  const out: Obj = { ...p, schemaVersion: 3 };
+  if (!isObj(p.templateData)) out.templateData = createDefaultTemplateData();
+  const style: Obj = isObj(p.style) ? { ...p.style } : { ...DEFAULT_STYLE };
+  if (!isObj(style.vertical)) style.vertical = { ...DEFAULT_STYLE.vertical };
+  out.style = style;
+  return out;
 }
 
 function v1ToV2(p: Obj): Obj {

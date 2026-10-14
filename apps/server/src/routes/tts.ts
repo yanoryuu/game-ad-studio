@@ -1,5 +1,7 @@
 import type { Express } from "express";
 import {
+  hasNarrationInput,
+  sameVoice,
   ttsPreviewRequestSchema,
   ttsSynthesizeRequestSchema,
   ttsVoicesQuerySchema,
@@ -20,8 +22,9 @@ import { listVoices, previewWav, removeLineAudio, synthesizeLine, ttsStatus, typ
  *   POST /api/projects/:id/tts                -> Project      (body TtsSynthesizeRequest; synchronous)
  *   POST /api/tts/preview                     -> audio/wav    (body TtsPreviewRequest)
  *
- * Non-fatal per-line warnings (e.g. whisper failed -> proportional caption timing) are logged and also sent
- * in the response header `X-Tts-Warnings` = encodeURIComponent(JSON.stringify([{ lineId, warning }])).
+ * v3: lines with voice.engine "recorded" are converted from voice.sourcePath (§6.10). Non-fatal per-line warnings
+ * (e.g. whisper failed -> proportional caption timing) are stored in line.warning (cleared by the next synthesis),
+ * logged, and also sent in the response header `X-Tts-Warnings` = encodeURIComponent(JSON.stringify([{ lineId, warning }])).
  */
 
 type Snapshot = Pick<ScriptLine, "id" | "text" | "lang" | "voice">;
@@ -29,9 +32,6 @@ type Outcome =
   | { kind: "ok"; snap: Snapshot; result: LineSynthesis }
   | { kind: "error"; snap: Snapshot; error: string }
   | { kind: "clear"; snap: Snapshot };
-
-const sameVoice = (a: ScriptLine["voice"], b: ScriptLine["voice"]) =>
-  a.engine === b.engine && a.speaker === b.speaker && a.speed === b.speed;
 
 function unchanged(line: ScriptLine, snap: Snapshot): boolean {
   return line.text === snap.text && line.lang === snap.lang && sameVoice(line.voice, snap.voice);
@@ -90,7 +90,7 @@ export function registerTtsRoutes(app: Express): void {
       }
     } else {
       targets = project.script.filter(
-        (l) => l.lang === lang && (l.text.trim() ? l.status !== "ok" : l.status !== "none" || !!l.audioPath),
+        (l) => l.lang === lang && (hasNarrationInput(l) ? l.status !== "ok" : l.status !== "none" || !!l.audioPath),
       );
     }
 
@@ -99,7 +99,12 @@ export function registerTtsRoutes(app: Express): void {
     let voicevoxDown: string | null = null; // don't wait for the engine again after it failed once in this request
     for (const line of targets) {
       const snap: Snapshot = { id: line.id, text: line.text, lang: line.lang, voice: { ...line.voice } };
-      if (!line.text.trim()) {
+      if (line.voice.engine === "recorded" && !line.voice.sourcePath) {
+        // §6.10: a recorded line without a recording is an error (keeps any previous audio), not a clear
+        outcomes.push({ kind: "error", snap, error: "録音ファイルがありません (upload a recording for this line)" });
+        continue;
+      }
+      if (!hasNarrationInput(line)) {
         outcomes.push({ kind: "clear", snap });
         continue;
       }
@@ -126,12 +131,15 @@ export function registerTtsRoutes(app: Express): void {
       p.script = p.script.map((line) => {
         const o = outcomes.find((x) => x.snap.id === line.id);
         if (!o || !unchanged(line, o.snap)) return line; // deleted or edited meanwhile -> leave it (web marked it stale)
-        const { audioPath: _a, durationSec: _d, error: _e, credit: _c, ...base } = line;
+        const { audioPath: _a, durationSec: _d, error: _e, credit: _c, warning: _w, ...base } = line;
         if (o.kind === "clear") {
           cleared.push(line.id);
           return { ...base, captions: [], status: "none" };
         }
-        if (o.kind === "error") return { ...line, status: "error", error: o.error.slice(0, 1000) };
+        if (o.kind === "error") {
+          const { warning: _w2, ...rest } = line;
+          return { ...rest, status: "error", error: o.error.slice(0, 1000) };
+        }
         if (o.result.warning) warnings.push({ lineId: line.id, warning: o.result.warning });
         return {
           ...base,
@@ -140,6 +148,7 @@ export function registerTtsRoutes(app: Express): void {
           captions: o.result.captions,
           status: "ok",
           ...(o.result.credit ? { credit: o.result.credit } : {}),
+          ...(o.result.warning ? { warning: o.result.warning.slice(0, 1000) } : {}),
         };
       });
     });

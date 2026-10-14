@@ -1,9 +1,14 @@
 import type { CSSProperties } from "react";
-import type { CaptionStyle, Project, Style, Watermark, WatermarkPosition } from "@gas/shared";
+import type { CaptionStyle, Format, Project, Style, VerticalMode, Watermark, WatermarkPosition } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import type { UpdateProject } from "../hooks/useProject";
 import { cx } from "../util";
-import { Field, Section, Segmented, Slider, Switch } from "./ui";
+import { Field, Icon, Section, Segmented, Slider, Switch } from "./ui";
+
+const VERTICAL_MODES: { mode: VerticalMode; name: string; desc: string }[] = [
+  { mode: "blur", name: "ぼかし背景", desc: "16:9 の映像全体を中央に、上下をぼかしで埋める" },
+  { mode: "crop", name: "クロップ", desc: "縦いっぱいに切り抜く。位置はクリップごとに調整" },
+];
 
 const CORNERS: { pos: Exclude<WatermarkPosition, "none">; label: string }[] = [
   { pos: "top-left", label: "左上" },
@@ -12,7 +17,13 @@ const CORNERS: { pos: Exclude<WatermarkPosition, "none">; label: string }[] = [
   { pos: "bottom-right", label: "右下" },
 ];
 
-export function StylePanel(props: { project: Project; update: UpdateProject }) {
+export function StylePanel(props: {
+  project: Project;
+  update: UpdateProject;
+  format: Format;
+  setFormat: (f: Format) => void;
+  onOpenClips: () => void;
+}) {
   const { project, update } = props;
   const style = project.style;
   const wm = style.watermark;
@@ -23,8 +34,48 @@ export function StylePanel(props: { project: Project; update: UpdateProject }) {
 
   const logo = project.game.logo ? assetUrl("", project.id, project.game.logo) : null;
 
+  const vmode = style.vertical?.mode ?? "blur";
+  const cropClips = project.clips.filter((c) => c.focusX !== undefined && c.focusX !== 0.5).length;
+
   return (
     <div className="style-panel">
+      <Section title="縦型 (9:16)">
+        <div className="vmode-list" role="radiogroup" aria-label="9:16 の作り方">
+          {VERTICAL_MODES.map((m) => (
+            <button
+              key={m.mode}
+              type="button"
+              role="radio"
+              aria-checked={vmode === m.mode}
+              className={cx("vmode", vmode === m.mode && "is-active")}
+              onClick={() => setStyle({ vertical: { mode: m.mode } })}
+            >
+              <span className={cx("vmode-glyph", `vg-${m.mode}`)} aria-hidden>
+                <span className="vg-band" />
+                <span className="vg-video" />
+                <span className="vg-band" />
+              </span>
+              <span className="vmode-name">{m.name}</span>
+              <span className="vmode-desc">{m.desc}</span>
+            </button>
+          ))}
+        </div>
+        {vmode === "crop" ? (
+          <div className="field-hint">
+            切り抜く位置(focusX)はクリップを編集すると映像上の枠で調整できます
+            {cropClips ? `(調整済み ${cropClips} 本)` : ""}。{" "}
+            <button className="link-btn" onClick={props.onOpenClips}>
+              クリップ一覧を開く
+            </button>
+          </div>
+        ) : null}
+        {props.format !== "9:16" ? (
+          <button className="btn btn-sm" onClick={() => props.setFormat("9:16")}>
+            <Icon.Crop size={13} /> 9:16 でプレビュー
+          </button>
+        ) : null}
+      </Section>
+
       <Section title="配置プレビュー">
         {/* Miniature 16:9 frame showing watermark corner + caption placement. */}
         <div className="mini-frame" aria-label="ウォーターマークと字幕の配置">

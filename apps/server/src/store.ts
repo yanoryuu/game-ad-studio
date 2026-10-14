@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import { createDefaultProject, migrateProject, projectSchema, type Project, type ProjectSummary } from "@gas/shared";
+import { createDefaultProject, migrateProject, projectSchema, sameVoice, type Project, type ProjectSummary } from "@gas/shared";
 import { badRequest, notFound } from "./errors";
 import { PROJECTS_DIR, projectDir } from "./paths";
 
@@ -158,9 +158,6 @@ export async function listProjects(): Promise<ProjectSummary[]> {
 /* PUT merge: server-owned fields always come from the stored copy      */
 /* ------------------------------------------------------------------ */
 
-const sameVoice = (a: Project["script"][number]["voice"], b: Project["script"][number]["voice"]) =>
-  a.engine === b.engine && a.speaker === b.speaker && a.speed === b.speed;
-
 /**
  * Applied by PUT /api/projects/:id so a debounced web save built from an older snapshot cannot
  * clobber results written by background jobs:
@@ -169,7 +166,9 @@ const sameVoice = (a: Project["script"][number]["voice"], b: Project["script"][n
  *  - candidates: list comes from `stored` (only those whose source still exists); `adopted` comes from the body.
  *  - script: the body wins, except a line whose text+voice equal the stored line while the stored one has
  *    status "ok" and the body's doesn't -> the stored synthesis result (audioPath, durationSec, captions,
- *    status, error, credit) is kept.
+ *    status, error, credit, v3 warning) is kept. sameVoice() includes voice.sourcePath (recorded lines).
+ *  - v3 audio.bgm: beats / bpm / analysisStatus / analysisError always come from `stored` when both have a BGM
+ *    with the same `path`; otherwise (BGM replaced or new) the body's values are dropped (stale).
  */
 export function mergeServerOwned(stored: Project, body: Project): Project {
   const storedSources = new Map(stored.sources.map((s) => [s.id, s]));
@@ -191,7 +190,7 @@ export function mergeServerOwned(stored: Project, body: Project): Project {
     const st = storedLines.get(l.id);
     if (!st || st.status !== "ok" || l.status === "ok") return l;
     if (st.text !== l.text || st.lang !== l.lang || !sameVoice(st.voice, l.voice)) return l;
-    const { audioPath: _a, durationSec: _d, error: _e, credit: _c, ...base } = l;
+    const { audioPath: _a, durationSec: _d, error: _e, credit: _c, warning: _w, ...base } = l;
     return {
       ...base,
       captions: st.captions,
@@ -199,7 +198,23 @@ export function mergeServerOwned(stored: Project, body: Project): Project {
       ...(st.audioPath ? { audioPath: st.audioPath } : {}),
       ...(st.durationSec ? { durationSec: st.durationSec } : {}),
       ...(st.credit ? { credit: st.credit } : {}),
+      ...(st.warning ? { warning: st.warning } : {}),
     };
   });
-  return { ...body, sources, candidates, script };
+  let audio = body.audio;
+  if (body.audio.bgm) {
+    const { beats: _b, bpm: _p, analysisStatus: _s, analysisError: _e, ...bgm } = body.audio.bgm;
+    const st = stored.audio.bgm;
+    const owned =
+      st && st.path === bgm.path
+        ? {
+            ...(st.beats ? { beats: st.beats } : {}),
+            ...(st.bpm ? { bpm: st.bpm } : {}),
+            ...(st.analysisStatus ? { analysisStatus: st.analysisStatus } : {}),
+            ...(st.analysisError ? { analysisError: st.analysisError } : {}),
+          }
+        : {};
+    audio = { ...body.audio, bgm: { ...bgm, ...owned } };
+  }
+  return { ...body, sources, candidates, script, audio };
 }

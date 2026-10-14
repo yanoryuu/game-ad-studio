@@ -4,19 +4,19 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
-import { SERVER_PORT, type Format, type Fps, type Lang, type Project, type RenderJob } from "@gas/shared";
+import { type Format, type Fps, type Lang, type Project, type RenderJob } from "@gas/shared";
 // type-only: importing the compositions package at runtime would pull React/fonts into the server process
 import type { AdVideoProps } from "@gas/compositions";
 import { notFound } from "./errors";
-import { BROWSER_EXECUTABLE, BUNDLE_WATCH_DIRS, COMPOSITIONS_ENTRY, projectDir } from "./paths";
+import { BROWSER_EXECUTABLE, BUNDLE_WATCH_DIRS, COMPOSITIONS_ENTRY, LISTEN_PORT, projectDir } from "./paths";
 import { readProject } from "./store";
 
 /** Must equal COMPOSITION_ID exported by @gas/compositions (kept literal to avoid a runtime import). */
 const COMPOSITION_ID = "AdVideo";
-const ASSET_BASE_URL = `http://localhost:${SERVER_PORT}`;
+const ASSET_BASE_URL = `http://localhost:${LISTEN_PORT}`;
 const MAX_KEPT_JOBS = 200;
 
-type JobInternal = RenderJob & { fps?: Fps; createdAt: number };
+type JobInternal = RenderJob & { fps?: Fps; createdAtMs: number };
 
 const jobs = new Map<string, JobInternal>();
 const queue: string[] = [];
@@ -88,9 +88,22 @@ function publicJob(j: JobInternal): RenderJob {
     status: j.status,
     progress: j.progress,
   };
-  if (j.outputPath) out.outputPath = j.outputPath;
+  if (j.outputPath) {
+    out.outputPath = j.outputPath;
+    out.absPath = path.join(projectDir(j.projectId), j.outputPath);
+  }
   if (j.error) out.error = j.error;
+  if (j.createdAt) out.createdAt = j.createdAt;
   return out;
+}
+
+/** v3: this project's jobs known in memory (all statuses), newest first. */
+export function listProjectJobs(projectId: string): RenderJob[] {
+  // Map iteration = insertion (queue) order; reversed = newest first (stable for jobs queued in one batch)
+  return [...jobs.values()]
+    .filter((j) => j.projectId === projectId)
+    .reverse()
+    .map(publicJob);
 }
 
 export function getJob(jobId: string): RenderJob {
@@ -103,7 +116,7 @@ function pruneJobs() {
   if (jobs.size <= MAX_KEPT_JOBS) return;
   const finished = [...jobs.values()]
     .filter((j) => j.status === "done" || j.status === "error")
-    .sort((a, b) => a.createdAt - b.createdAt);
+    .sort((a, b) => a.createdAtMs - b.createdAtMs);
   for (const j of finished.slice(0, jobs.size - MAX_KEPT_JOBS)) jobs.delete(j.jobId);
 }
 
@@ -116,7 +129,8 @@ export function enqueueRender(projectId: string, opts: { format: Format; lang: L
     lang: opts.lang,
     status: "queued",
     progress: 0,
-    createdAt: Date.now(),
+    createdAtMs: Date.now(),
+    createdAt: new Date().toISOString(),
     ...(opts.fps ? { fps: opts.fps } : {}),
   };
   jobs.set(jobId, job);
