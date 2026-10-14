@@ -8,6 +8,7 @@ const SLOT_LABEL: Record<TemplateId, Record<ClipSlot, string>> = {
   "hook-play-cta": { hook: "フック", main: "本編" },
   features: { hook: "タイトル", main: "魅力" },
   trailer: { hook: "フック", main: "本編" },
+  intro: { hook: "前半", main: "後半" },
 };
 const SLOT_HINT: Record<TemplateId, Record<ClipSlot, string>> = {
   "hook-play-cta": {
@@ -21,6 +22,10 @@ const SLOT_HINT: Record<TemplateId, Record<ClipSlot, string>> = {
   trailer: {
     hook: "カット列の先頭。フック → 本編の順に短いカットでつながります。",
     main: "フックの後に続くカット(各最大 2 秒)。",
+  },
+  intro: {
+    hook: "台本の行ごとに、フック → 本編の順で映像が切り替わります。",
+    main: "フックの後に続く映像(足りなければ先頭に戻って繰り返し)。",
   },
 };
 const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥"];
@@ -81,7 +86,7 @@ export function ClipList(props: {
   const itemIds = new Set(items.map((i) => i.id));
   const assigned = useMemo(() => (featureMode ? assignFeatureClips(project) : {}), [featureMode, project]);
   const trailerIndex = useMemo(
-    () => (tpl === "trailer" ? new Map(trailerClipOrder(project).map((c, i) => [c.id, i])) : null),
+    () => (tpl === "trailer" || tpl === "intro" ? new Map(trailerClipOrder(project).map((c, i) => [c.id, i])) : null),
     [tpl, project],
   );
 

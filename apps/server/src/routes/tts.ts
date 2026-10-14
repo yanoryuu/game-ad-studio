@@ -2,6 +2,7 @@ import type { Express } from "express";
 import {
   hasNarrationInput,
   sameVoice,
+  stripEmphasis,
   ttsPreviewRequestSchema,
   ttsSynthesizeRequestSchema,
   ttsVoicesQuerySchema,
@@ -62,7 +63,7 @@ export function registerTtsRoutes(app: Express): void {
 
   app.post("/api/tts/preview", async (req, res) => {
     const body = parseBody(ttsPreviewRequestSchema, req.body);
-    if (!body.text.trim()) throw badRequest("text is empty");
+    if (!stripEmphasis(body.text).trim()) throw badRequest("text is empty"); // v4: 【】 are not read
     let wav: Buffer;
     try {
       wav = await previewWav({ engine: body.engine, speaker: body.speaker, speed: body.speed }, body.text);

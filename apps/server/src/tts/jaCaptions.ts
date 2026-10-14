@@ -1,4 +1,5 @@
 import type { Caption } from "@gas/shared";
+import { atRunEdge, breaksRun, decorate, parseEmText } from "./emphasisText";
 import type { VvAudioQuery } from "./voicevox";
 
 /**
@@ -27,6 +28,9 @@ import type { VvAudioQuery } from "./voicevox";
  *    Chunk boundaries within ~0.75 mora of an accent-phrase boundary snap to it.
  * 5. Display: trailing 、。 are removed (！？… kept). Each caption stays visible until the next one starts
  *    (covering pauses); the last one until the end of the audio. Times are relative to the line start.
+ * v4 (§6.13): the audio is synthesized from stripEmphasis(text), so steps 2–4 run on the stripped text; every
+ * character keeps its emphasis flag and each chunk's text gets its 【】 back (closed / reopened at chunk boundaries).
+ * Breaks inside an emphasis run are heavily penalised (taken only when the run does not fit in one chunk).
  */
 
 export const JA_MAX_CHARS = 14;
@@ -189,7 +193,7 @@ function moraToTime(g: Group, m: number): number {
 }
 
 /** Quality of a break between chars[p-1] and chars[p] (higher = better). */
-function breakScore(chars: string[], p: number, moraPos: number[], phraseStarts: number[]): number {
+function breakScore(chars: string[], p: number, moraPos: number[], phraseStarts: number[], emph?: readonly boolean[]): number {
   const a = chars[p - 1]!;
   const b = chars[p]!;
   let s = 0;
@@ -202,45 +206,84 @@ function breakScore(chars: string[], p: number, moraPos: number[], phraseStarts:
   if (KATAKANA.test(a) && KATAKANA.test(b)) s -= 3; // inside a katakana word
   if (/[「『（(]/.test(a)) s -= 5; // right after an opening bracket
   if (SMALL_KANA.test(b) || /[ーっッんン」』）)]/.test(b)) s -= 4;
+  if (breaksRun(emph, p)) s -= 8; // v4: keep emphasis runs together
+  else if (atRunEdge(emph, p)) s += 1.5;
   return s;
 }
 
 /** Splits [from, to) into the minimum number of chunks of <= maxChars with the best breaks (DP). */
-function splitRange(chars: string[], from: number, to: number, moraPos: number[], phraseStarts: number[], maxChars: number): [number, number][] {
+function splitRange(
+  chars: string[],
+  from: number,
+  to: number,
+  moraPos: number[],
+  phraseStarts: number[],
+  maxChars: number,
+  emph?: readonly boolean[],
+): [number, number][] {
   const len = to - from;
   if (len <= maxChars) return [[from, to]];
   const minParts = Math.ceil(len / maxChars);
   for (let parts = minParts; parts <= len; parts++) {
-    const target = len / parts;
-    // dp[k][p]: best score splitting [from, p) into k chunks
-    const dp: Map<number, { score: number; prev: number }>[] = Array.from({ length: parts + 1 }, () => new Map());
-    dp[0]!.set(from, { score: 0, prev: -1 });
-    for (let k = 1; k <= parts; k++) {
-      for (const [p0, v] of dp[k - 1]!) {
-        for (let p = p0 + 1; p <= Math.min(to, p0 + maxChars); p++) {
-          if (k === parts && p !== to) continue;
-          if (k < parts && p === to) continue;
-          const sizePen = -Math.abs(p - p0 - target) * 0.35;
-          const brk = p === to ? 0 : breakScore(chars, p, moraPos, phraseStarts);
-          const sc = v.score + sizePen + brk;
-          const cur = dp[k]!.get(p);
-          if (!cur || sc > cur.score) dp[k]!.set(p, { score: sc, prev: p0 });
-        }
-      }
+    const out = splitRangeExact(chars, from, to, moraPos, phraseStarts, maxChars, emph, parts);
+    if (!out) continue;
+    // v4: one extra chunk is allowed when it avoids cutting an emphasis run that fits in one chunk
+    if (emph && out.slice(1).some(([c]) => cutsFittingRun(emph, c, from, to, maxChars))) {
+      const alt = splitRangeExact(chars, from, to, moraPos, phraseStarts, maxChars, emph, parts + 1);
+      if (alt && !alt.slice(1).some(([c]) => cutsFittingRun(emph, c, from, to, maxChars))) return alt;
     }
-    const end = dp[parts]!.get(to);
-    if (!end) continue;
-    const cuts: number[] = [to];
-    let p = to;
-    for (let k = parts; k > 0; k--) {
-      p = dp[k]!.get(p)!.prev;
-      cuts.unshift(p);
-    }
-    const out: [number, number][] = [];
-    for (let i = 0; i + 1 < cuts.length; i++) out.push([cuts[i]!, cuts[i + 1]!]);
     return out;
   }
   return [[from, to]];
+}
+
+/** True when a cut at p splits an emphasis run (within [from, to)) that is not longer than maxChars. */
+function cutsFittingRun(emph: readonly boolean[], p: number, from: number, to: number, maxChars: number): boolean {
+  if (p <= from || p >= to || !breaksRun(emph, p)) return false;
+  let a = p;
+  while (a > from && emph[a - 1]) a--;
+  let b = p;
+  while (b < to && emph[b]) b++;
+  return b - a <= maxChars;
+}
+
+/** splitRange with a fixed number of parts (null when impossible). */
+function splitRangeExact(
+  chars: string[],
+  from: number,
+  to: number,
+  moraPos: number[],
+  phraseStarts: number[],
+  maxChars: number,
+  emph: readonly boolean[] | undefined,
+  parts: number,
+): [number, number][] | null {
+  const len = to - from;
+  if (parts > len) return null;
+  const target = len / parts;
+  const dp: Map<number, { score: number; prev: number }>[] = Array.from({ length: parts + 1 }, () => new Map());
+  dp[0]!.set(from, { score: 0, prev: -1 });
+  for (let k = 1; k <= parts; k++) {
+    for (const [p0, v] of dp[k - 1]!) {
+      for (let p = p0 + 1; p <= Math.min(to, p0 + maxChars); p++) {
+        if (k === parts && p !== to) continue;
+        if (k < parts && p === to) continue;
+        const sc = v.score - Math.abs(p - p0 - target) * 0.35 + (p === to ? 0 : breakScore(chars, p, moraPos, phraseStarts, emph));
+        const cur = dp[k]!.get(p);
+        if (!cur || sc > cur.score) dp[k]!.set(p, { score: sc, prev: p0 });
+      }
+    }
+  }
+  if (!dp[parts]!.get(to)) return null;
+  const cuts: number[] = [to];
+  let p = to;
+  for (let k = parts; k > 0; k--) {
+    p = dp[k]!.get(p)!.prev;
+    cuts.unshift(p);
+  }
+  const out: [number, number][] = [];
+  for (let i = 0; i + 1 < cuts.length; i++) out.push([cuts[i]!, cuts[i + 1]!]);
+  return out;
 }
 
 function splitAtPunct(chars: string[]): [number, number][] {
@@ -263,26 +306,33 @@ function displayText(s: string): string {
   return s.trim().replace(/[、。，．,.]+$/u, "").trim();
 }
 
-/** Builds line-relative captions for `text` synthesized from `query` whose real wav length is `durationSec`. */
+/**
+ * Builds line-relative captions for `text` (the line text, may contain 【】) whose stripEmphasis was synthesized
+ * from `query` with a real wav length of `durationSec`.
+ */
 export function buildJaCaptions(text: string, query: VvAudioQuery, durationSec: number, maxChars = JA_MAX_CHARS): Caption[] {
   const { groups, predicted } = buildGroups(query);
   const stretch = predicted > 0 && durationSec > 0 && Math.abs(durationSec / predicted - 1) < 0.25 ? durationSec / predicted : 1;
   for (const g of groups) for (const m of g.moras) { m.start *= stretch; m.end *= stretch; }
 
-  const segments = segmentText(text);
+  const em = parseEmText(text); // stripped (= synthesized) text + emphasis flags
+  const segments = segmentText(em.chars.join(""));
   if (!groups.length || !segments.length) {
-    const t = displayText(text);
+    const t = decorate(em.chars, em.emph, displayText);
     return t ? [{ text: t, startSec: 0, endSec: round3(durationSec) }] : [];
   }
 
   const raw: { text: string; start: number }[] = [];
+  let offset = 0; // the segments concatenate to the stripped text: offset of the current one in em.chars
   for (const { seg, group } of matchSegments(segments, groups)) {
     const chars = [...seg];
+    const emph = em.emph.slice(offset, offset + chars.length);
+    offset += chars.length;
     const moraPos = charMoraPositions(chars, group.moras.length);
     const snap = (m: number) => group.phraseStarts.find((x) => Math.abs(x - m) <= 0.75) ?? m;
     for (const [a, b] of splitAtPunct(chars)) {
-      for (const [from, to] of splitRange(chars, a, b, moraPos, group.phraseStarts, maxChars)) {
-        const t = displayText(chars.slice(from, to).join(""));
+      for (const [from, to] of splitRange(chars, a, b, moraPos, group.phraseStarts, maxChars, emph)) {
+        const t = decorate(chars.slice(from, to), emph.slice(from, to), displayText);
         if (!t) continue;
         let first = from;
         while (first < to && !readable(chars[first]!)) first++;
@@ -316,17 +366,18 @@ export function jaCharWeight(ch: string): number {
 export const isReadableJaChar = readable;
 
 /**
- * Splits plain Japanese text into readable caption chunks (same rules as buildJaCaptions: cut at punctuation, long
- * pieces split by the break-quality DP, trailing 、。 removed). `first` = index in [...text.trim()] of the chunk's
- * first readable character (used to look up its time).
+ * Splits Japanese text into readable caption chunks (same rules as buildJaCaptions: cut at punctuation, long
+ * pieces split by the break-quality DP, trailing 、。 removed). v4: `text` may contain 【】 — chunking runs on the
+ * stripped text and each chunk's text gets its markers back. `first` = index in [...stripEmphasis(text).trim()]
+ * of the chunk's first readable character (used to look up its time).
  */
 export function chunkJaText(text: string, maxChars = JA_MAX_CHARS): { text: string; first: number }[] {
-  const chars = [...text.trim()];
+  const { chars, emph } = parseEmText(text);
   const pos = chars.map((_, i) => i).concat(chars.length);
   const out: { text: string; first: number }[] = [];
   for (const [a, b] of splitAtPunct(chars)) {
-    for (const [from, to] of splitRange(chars, a, b, pos, [], maxChars)) {
-      const t = displayText(chars.slice(from, to).join(""));
+    for (const [from, to] of splitRange(chars, a, b, pos, [], maxChars, emph)) {
+      const t = decorate(chars.slice(from, to), emph.slice(from, to), displayText);
       if (!t) continue;
       let first = from;
       while (first < to && !readable(chars[first]!)) first++;

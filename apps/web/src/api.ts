@@ -12,6 +12,8 @@ import type {
   RenderListResponse,
   RenderRequest,
   RenderStartResponse,
+  SeListResponse,
+  SeManifestUpdateRequest,
   TtsEngine,
   TtsPreviewRequest,
   TtsStatusResponse,
@@ -95,6 +97,13 @@ export const api = {
   listRenders: (id: string) => request<RenderListResponse>("GET", `/api/projects/${encodeURIComponent(id)}/renders`),
   /** 202 Project (audio.bgm.analysisStatus "running"); 409 when there is no BGM / already running. */
   analyzeBgm: (id: string) => request<Project>("POST", `/api/projects/${encodeURIComponent(id)}/bgm/analyze`),
+
+  /* ---- Phase 3.5: SE library (§6.12) ---- */
+  listSe: () => request<SeListResponse>("GET", "/api/se"),
+  /** Re-reads the library dir (after the user added files) and returns the list. */
+  rescanSe: () => request<SeListResponse>("POST", "/api/se/rescan"),
+  /** Merges credits into se.json ("" removes one) and returns the list. */
+  updateSeManifest: (body: SeManifestUpdateRequest) => request<SeListResponse>("PUT", "/api/se/manifest", body),
 
   /* ---- Phase 2 ---- */
   /** 202 Project (analysisStatus "running"); 409 when busy / proxy not ready. */

@@ -11,5 +11,8 @@
     "dir": "D:\\Tools\\whisper",
     "model": "base.en",
     "multilingualModel": "small"
+  },
+  "se": {
+    "dir": "D:\\Tools\\se"
   }
 }

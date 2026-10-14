@@ -1,4 +1,4 @@
-import type { Lang, Project, ScriptLine, ScriptSectionId } from "@gas/shared";
+import { stripEmphasis, type Lang, type Project, type ScriptLine, type ScriptSectionId } from "@gas/shared";
 
 /**
  * Narration placement rules (docs/ARCHITECTURE.md §5.1). Pure functions, no React.
@@ -34,7 +34,7 @@ export function playableLines(project: Project, lang: Lang): ScriptLine[] {
   return project.script.filter(
     (l) =>
       l.lang === lang &&
-      (l.voice.engine === "recorded" || l.text.trim() !== "") &&
+      (l.voice.engine === "recorded" || stripEmphasis(l.text).trim() !== "") &&
       typeof l.audioPath === "string" &&
       l.audioPath !== "" &&
       typeof l.durationSec === "number" &&

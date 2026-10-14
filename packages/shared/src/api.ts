@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { formatSchema, fpsSchema, langSchema, templateIdSchema, ttsEngineSchema, type Project } from "./project";
+import { formatSchema, fpsSchema, langSchema, seFileIdSchema, templateIdSchema, ttsEngineSchema, type Project } from "./project";
 
 /**
  * HTTP API request/response shapes (see docs/ARCHITECTURE.md).
@@ -244,3 +244,53 @@ export type RenderListResponse = z.infer<typeof renderListResponseSchema>;
  * 409 if there is no audio.bgm or its analysis is already running.
  */
 export type BgmAnalyzeStartResponse = Project;
+
+/* ------------------------------------------------------------------ */
+/* Phase 3.5: SE library (ARCHITECTURE §6.12)                            */
+/* ------------------------------------------------------------------ */
+
+/** File extensions the SE library lists / serves. */
+export const SE_EXTS = [".wav", ".mp3", ".ogg", ".m4a", ".aac"] as const;
+
+/** Library manifest `<se.dir>/se.json` (server-owned file; edited via PUT /api/se/manifest). */
+export const seManifestSchema = z.object({
+  version: z.literal(1),
+  /** file id (library-relative path) -> metadata. Entries for missing files are kept (harmless). */
+  files: z.record(z.string(), z.object({ credit: z.string().optional() })),
+});
+export type SeManifest = z.infer<typeof seManifestSchema>;
+
+/** One audio file of the SE library. */
+export const seFileSchema = z.object({
+  /** library-relative path with "/" (= the value stored in audio.se.slots), e.g. "_placeholder/pop.wav" */
+  id: seFileIdSchema,
+  /** file name for display, e.g. "pop.wav" */
+  name: z.string(),
+  /** length in seconds (ffprobe; 0 if unknown) */
+  durationSec: z.number().nonnegative(),
+  /** required credit from se.json (e.g. "効果音:OtoLogic"); absent = none */
+  credit: z.string().optional(),
+});
+export type SeFile = z.infer<typeof seFileSchema>;
+
+/**
+ * GET /api/se, POST /api/se/rescan, PUT /api/se/manifest -> SeListResponse.
+ * files: every SE_EXTS file under `dir` (recursive, dot-files/dirs skipped), "_placeholder/*" included, sorted by id.
+ */
+export const seListResponseSchema = z.object({
+  /** absolute library dir (config se.dir, default D:\Tools\se) */
+  dir: z.string(),
+  /** false when the dir does not exist (files = []) */
+  exists: z.boolean(),
+  files: z.array(seFileSchema),
+});
+export type SeListResponse = z.infer<typeof seListResponseSchema>;
+
+/**
+ * PUT /api/se/manifest -> SeListResponse. MERGES credits into se.json: id -> credit text; "" removes the credit.
+ * Ids are not required to exist (but must be valid ids).
+ */
+export const seManifestUpdateRequestSchema = z.object({
+  credits: z.record(seFileIdSchema, z.string().max(200)),
+});
+export type SeManifestUpdateRequest = z.infer<typeof seManifestUpdateRequestSchema>;

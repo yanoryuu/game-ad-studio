@@ -12,6 +12,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   "hook-play-cta": "フック → プレイ → CTA",
   features: "魅力紹介",
   trailer: "トレーラー風",
+  intro: "紹介動画風",
 };
 
 export function ProjectList() {

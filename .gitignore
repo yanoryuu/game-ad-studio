@@ -9,3 +9,15 @@ out/
 .env.local
 .vite/
 gas.config.json
+
+# Sound effects: the SE library lives OUTSIDE the repo (config se.dir, default D:\Tools\se, incl. _placeholder/
+# and se.json). User-provided free SE (効果音ラボ, OtoLogic, ...) must never be committed or redistributed.
+*.wav
+*.mp3
+*.ogg
+*.m4a
+*.aac
+*.flac
+/se/
+/_placeholder/
+/se.json

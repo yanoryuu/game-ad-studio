@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { collectCredits, type Lang, type Project, type TtsEngine, type TtsStatusResponse, type TtsVoice } from "@gas/shared";
+import { collectCredits, templateUsesSe, type Lang, type Project, type TtsEngine, type TtsStatusResponse, type TtsVoice } from "@gas/shared";
 import { api, ApiError, featureErrorMessage } from "../api";
+import { seFilesOf, useSeLibrary } from "./useSeLibrary";
 
 export type TtsStatusState =
   | { kind: "loading" }
@@ -144,11 +145,14 @@ export function useAudioPlayer() {
 /**
  * Credits required by the narration of `lang`: shared collectCredits() with the VOICEVOX voice list, so lines
  * not synthesized yet resolve their speaker credit (ARCHITECTURE §7).
+ * v4: + SE credits from the live library list (GET /api/se) when the template plays SE; falls back to the
+ * project snapshot (audio.se.credits) while the list is unavailable.
  */
 export function useRequiredCredits(project: Project, lang: Lang): string[] {
   const needsLookup = project.script.some(
     (l) => l.lang === lang && l.text.trim() && l.voice.engine === "voicevox" && !l.credit,
   );
   const { entry } = useTtsVoices("voicevox", needsLookup);
-  return collectCredits(project, lang, entry.kind === "ok" ? entry.voices : undefined);
+  const se = useSeLibrary(templateUsesSe(project.template));
+  return collectCredits(project, lang, entry.kind === "ok" ? entry.voices : undefined, seFilesOf(se.state));
 }

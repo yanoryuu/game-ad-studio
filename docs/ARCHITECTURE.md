@@ -1,8 +1,9 @@
-# Game Ad Studio — アーキテクチャ / 実装契約 (Phase 3)
+# Game Ad Studio — アーキテクチャ / 実装契約 (Phase 3.5)
 
 このドキュメントは `packages/compositions` / `apps/server` / `apps/web` を並行実装する際の **唯一の契約** です。
 仕様の背景は `docs/SPEC.md` を参照。ここに書かれた名前・パス・型・URL は勝手に変えないこと。変更が必要なら実装せずに報告する。
-Phase 2 で変わった/増えた箇所には **[v2]**、Phase 3 で変わった/増えた箇所には **[v3]** を付けている。
+Phase 2 で変わった/増えた箇所には **[v2]**、Phase 3 で変わった/増えた箇所には **[v3]**、
+Phase 3.5(テンプレート `intro`・強調ワード・効果音)で変わった/増えた箇所には **[v4]** を付けている。
 
 ---
 
@@ -48,7 +49,7 @@ game-ad-studio/
   docs/SPEC.md, docs/ARCHITECTURE.md
   packages/
     shared/               @gas/shared       zod スキーマ + 型 + API 型 + migrateProject
-      src/index.ts, project.ts, migrate.ts, api.ts
+      src/index.ts, project.ts, migrate.ts, api.ts, [v4] emphasis.ts
     compositions/         @gas/compositions Remotion コンポジション [v3: テンプレート別に再構成、§5.4]
       src/index.ts          公開 API(§5)
       src/entry.ts, Root.tsx, constants.ts
@@ -56,12 +57,14 @@ game-ad-studio/
       src/metadata.ts       calcAdMetadata / getSectionDurations(レジストリ経由)
       src/narration.ts      buildNarrationPlan(レジストリ経由)
       src/common/**         [v3] 全テンプレート共通の部品(ClipTrack, Captions, NarrationTrack, Bgm, audioMix,
-                            Backdrop, EndCard, Watermark, NoFootage, fonts, theme, phrases, urls, clips, narrationLayout)
+                            Backdrop, EndCard, Watermark, NoFootage, fonts, theme, phrases, urls, clips, narrationLayout,
+                            [v4] RichText(強調ワード描画), SeTrack(効果音))
       src/templates/types.ts   [v3] TemplateModule インターフェース
       src/templates/index.ts   [v3] レジストリ(TEMPLATES / getTemplate)
       src/templates/hookPlayCta/**  [v3] 王道テンプレート(Phase 2 の実装をそのまま移動)
-      src/templates/features/**     [v3] 魅力紹介テンプレート(現在スタブ = hook-play-cta と同じ描画)
-      src/templates/trailer/**      [v3] トレーラー風テンプレート(現在スタブ = hook-play-cta と同じ描画)
+      src/templates/features/**     [v3] 魅力紹介テンプレート(実装済み)
+      src/templates/trailer/**      [v3] トレーラー風テンプレート(実装済み)
+      src/templates/intro/**        [v4] 紹介動画風テンプレート(現在スタブ = hook-play-cta の描画 + SE/字幕の配線、§5.8)
   apps/
     server/               @gas/server  Express :3101
       src/index.ts        アプリ組み立て(Phase 1 ルート + ルートモジュール登録)
@@ -76,28 +79,38 @@ game-ad-studio/
       src/tts/**             [v2] TTS の実装([v3] 録音ナレーション)
       src/routes/renders.ts  [v3] registerRenderRoutes(app) 一括書き出し・書き出し履歴(実装済み)
       src/routes/bgm.ts      [v3] registerBgmRoutes(app) BGM ビート解析の起動(実装済み、解析本体はスタブ)
-      src/beats/**           [v3] ビート検出の実装(analyzeBeats、現在スタブ)
+      src/beats/**           [v3] ビート検出の実装(analyzeBeats)
+      src/routes/se.ts       [v4] registerSeRoutes(app) / initSeLibrary() SE ライブラリ API(実装済み、§6.12)
+      src/se/**              [v4] SE ライブラリ(library.ts: 一覧・マニフェスト・パス解決 / placeholders.ts: 仮 SE 生成)
     web/                  @gas/web     Vite + React :5173
   projects/               実行時データ(git 管理外)
+
+D:\Tools\se\              [v4] SE ライブラリ(リポジトリ外。config `se.dir`、§6.12)
+  _placeholder/           ffmpeg で合成した仮 SE(pop / headline / point / info / transition / cta .wav、無ければ server が起動時に生成)
+  se.json                 マニフェスト(ファイル id → { credit })
+  <任意のサブフォルダ>/    ユーザーが置くフリー素材(効果音ラボ / OtoLogic など。再配布・コミット禁止)
 ```
 
-### 担当範囲(Phase 3 の並行作業、厳守)
+### 担当範囲(Phase 3.5 の並行作業、厳守)[v4]
 
 | 担当 | 書いてよい場所 |
 |---|---|
-| compositions-features | `packages/compositions/src/templates/features/**` のみ |
-| compositions-trailer | `packages/compositions/src/templates/trailer/**` のみ |
-| server | `apps/server/src/beats/**`, `apps/server/src/routes/bgm.ts`, `apps/server/src/tts/**`, `apps/server/src/routes/tts.ts` のみ |
+| compositions-intro | `packages/compositions/src/templates/intro/**` のみ |
+| server | `apps/server/src/se/**`, `apps/server/src/routes/se.ts`, `apps/server/src/tts/**`, `apps/server/src/routes/tts.ts` のみ |
 | web | `apps/web/src/**` のみ |
 
+(Phase 3 の表: compositions-features → `templates/features/**`、compositions-trailer → `templates/trailer/**`、
+server → `beats/**`, `routes/bgm.ts`, `tts/**`, `routes/tts.ts`。これらは Phase 3.5 では凍結。)
+
 - **凍結**: `packages/compositions/src/common/**`、`templates/types.ts`、`templates/index.ts`(レジストリ)、
-  `templates/hookPlayCta/**`、compositions 直下のファイル。テンプレート担当は `common` を **import して使うだけ**。
+  `templates/hookPlayCta/**`、[v4] `templates/features/**`、`templates/trailer/**`、compositions 直下のファイル。テンプレート担当は `common` を **import して使うだけ**。
   共通部品に変更が必要なら実装せずに報告する(自分のフォルダ内にコピー/ラップして解決できるならそれでよい)。
 - それ以外(`package.json` / `tsconfig*.json` / `vite.config.ts` / `packages/shared/**` / `docs/**` /
   `apps/server/src/` 直下のファイル / `apps/server/src/routes/{analysis,renders}.ts` / `.gitignore` / `gas.config*.json`)は誰も編集しない。必要な変更は報告する。
-- テンプレート担当は自分の `index.ts` が export する名前(`featuresTemplate` / `trailerTemplate`、`TemplateModule`)を変えない。
+- テンプレート担当は自分の `index.ts` が export する名前(`featuresTemplate` / `trailerTemplate` / [v4] `introTemplate`、`TemplateModule`)を変えない。
   タイムライン型は `TemplateTimeline` を拡張して自由に定義してよい。
-- server 担当は直下のモジュール(`store.ts`, `errors.ts`, `media.ts`, `paths.ts`, `config.ts`, `files.ts`, `render.ts`)を **import して使うだけ**。
+- server 担当は直下のモジュール(`store.ts`, `errors.ts`, `media.ts`, `paths.ts`, `config.ts`, `files.ts`, `render.ts`, `index.ts`)を **import して使うだけ**。
+  [v4] `routes/se.ts` の export(`registerSeRoutes`, `initSeLibrary`)と `se/library.ts` の `seFileExists`(render.ts が使う)の名前・シグネチャは変えない。
   ffmpeg 実行ヘルパが足りなければ自分のフォルダ内に書く(`media.ts` の `run` は非 export)。
 - `npm install` は禁止(依存は揃っている)。
 - 完了条件: ルートで `npm run typecheck` が通ること(web は `npm run build -w @gas/web` も)。
@@ -107,6 +120,8 @@ game-ad-studio/
 - server: `http://localhost:3101`(`SERVER_PORT`)。web(Vite dev): `http://localhost:5173`。`/api` と `/files` を 3101 にプロキシ。
   → web のコードは **常に相対 URL**(`/api/...`, `/files/...`)。
 - server は `cors()` を有効にする(レンダリング時のヘッドレス Chrome 用)。
+- [v4] SE ファイルは `/api/se/file/<id>`(§6.12)。プレビューは相対 URL(Vite の `/api` プロキシ経由)、レンダーは assetBaseUrl
+  `http://localhost:<LISTEN_PORT>` を前に付ける(`seFileUrl(baseUrl, id)`)。プロジェクトファイルと同じ仕組みなので追加設定は不要。
 - [v3] 待ち受けポートは環境変数 `GAS_PORT`(無ければ `PORT`、どちらも無ければ 3101)で上書きできる(`paths.ts` の `LISTEN_PORT`。
   レンダー時の assetBaseUrl もこのポート)。テスト用の別インスタンスは `GAS_PORT=3111 GAS_PROJECTS_DIR=<tmp> npx tsx src/index.ts`(apps/server で)。
 
@@ -114,7 +129,7 @@ game-ad-studio/
 
 ```
 projects/<projectId>/
-  project.json     Project(schemaVersion 3)
+  project.json     Project(schemaVersion 4)
   proxies/         <sourceId>.mp4      720p 30fps H.264 + AAC
   thumbs/          <sourceId>.jpg / [v2] <candidateId>.jpg(= cand_<nanoid>.jpg)
   assets/          アップロード画像・音声 <nanoid>.<ext>
@@ -128,17 +143,18 @@ projects/<projectId>/
   例外: `sources[].originalPath` だけは元動画の絶対パス。
 - [v2] **マイグレーション**: server は project.json を読むたびに `migrateProject(raw)`(`@gas/shared`)を通す。
   v1 ファイルはメモリ上で v2 に変換され、次の保存時に v2 で書かれる(読むだけではファイルは変わらない)。
-  [v3] 同様に v1 / v2 → v3。
+  [v3] 同様に v1 / v2 → v3。[v4] 同様に v1 / v2 / v3 → v4。
 - [v3] 特徴(魅力)項目 `feat_<id>`、トレーラーのテロップ `card_<id>`(web が `generateId("feat", 8)` / `generateId("card", 8)`。既定値は `feat_1..3`, `card_1..2`)。
+- [v4] intro の情報カード行 `info_<id>`、おすすめポイント `point_<id>`(web が `generateId("info", 8)` / `generateId("point", 8)`。既定値は `info_1..4`, `point_1..3`)。
 
-## 4. データモデル(`@gas/shared`, schemaVersion 3)
+## 4. データモデル(`@gas/shared`, schemaVersion 4)
 
 正は `packages/shared/src/project.ts`。要点:
 
 ```ts
 Project = {
-  schemaVersion: 3, id, name, createdAt, updatedAt,
-  template, formats: Format[], durationSec: 15 | 30 | null, fps: 30 | 60, languages: Lang[],
+  schemaVersion: 4, id, name, createdAt, updatedAt,
+  template /*[v4] + "intro"*/, formats: Format[], durationSec: 15 | 30 | null, fps: 30 | 60, languages: Lang[],
   game: { title, logo?, keyArt?, releaseText: { ja, en } /*[v2]*/, steamUrl?, platforms: string[] },
   sources: {
     id, originalPath, proxyPath, thumbPath, durationSec, fps, width, height, hasAudio,
@@ -168,12 +184,19 @@ Project = {
       analysisStatus?: "none" | "running" | "done" | "error",   // 無し = "none"
       analysisError?: string,
     },
+    se: {                                // [v4] 効果音(§5.9 / §6.12)。SE を出すテンプレート(SE_TEMPLATES = ["intro"])だけが鳴らす
+      enabled: boolean,                  // 既定 true
+      volume: 0..1,                      // 既定 0.7(ダッキングしない)
+      slots: { captionPop?, headline?, point?, info?, transition?, cta?: SeFileId },  // 既定 = 全スロット _placeholder/*.wav
+      credits?: Record<SeFileId, string>, // web が保持するクレジットのスナップショット(§6.12)
+    },
   },
   style: {
     primaryColor, accentColor, font: "noto-sans-jp",
     watermark: { position: "top-left"|"top-right"|"bottom-left"|"bottom-right"|"none", scale: 0.25..3 },  // [v2] 既定 top-right, 1
     captions: { enabled: boolean, position: "bottom" | "center", size: "m" | "l" },                        // [v2] 既定 true, bottom, m
     vertical: { mode: "blur" | "crop" },                                                                    // [v3] 既定 blur(§5.7)
+    emphasisColor: string,   // [v4] 【強調】の色。既定 "#FFE14D"(黄)。プリセット EMPHASIS_COLORS = { yellow "#FFE14D", red "#FF4B4B" }
   },
   templateData: {                                                            // [v3] テンプレート別設定(選択中でなくても保持)
     features: {
@@ -184,11 +207,25 @@ Project = {
       beatSync: boolean,       // BGM のビートにカット点を合わせる
       logoReveal: boolean,     // エンドカード前のロゴ演出
     },
+    intro: {                                                                 // [v4] 紹介動画風(§5.8)
+      headline: { ja, en },                // 見出し帯。【強調】と "\n" 改行可。"" = その言語は見出し文なし(タイトルを出す)
+      kicker?: { ja, en },                 // 見出しの上の小ラベル(既定 今話題 / TRENDING)。stripEmphasis して全体をバッジで描く
+      info: {
+        enabled: boolean,
+        items: { id /*info_*/, label: { ja, en }, value: { ja, en } /*【強調】可, "" = その言語で非表示*/ }[],  // 0..6
+        atLineId?: { ja?: lineId, en?: lineId },   // この行の開始でカードを出す(言語別)。無し/無効 = 本文 2 行目
+        durationSec: 0.5..20,                      // 表示時間。既定 4
+      },
+      points: {
+        items: { id /*point_*/, text: { ja, en } /*【強調】可*/, lineId?: { ja?: lineId, en?: lineId } }[],  // 0..5、配列順 = ①②③
+      },
+      clipPerLine: boolean,                // 既定 true: 本文の台本行ごとに次のクリップへ切り替え
+    },
   },
 }
 
 ScriptLine = {                                 // [v2]
-  id, lang, section: "hook" | "main" | "cta", text,
+  id, lang, section: "hook" | "main" | "cta", text,   // [v4] text は【強調】を含んでよい(読み上げは stripEmphasis(text))
   voice: {
     engine: "voicevox" | "piper" | "recorded",   // [v3] "recorded" = アップロードした録音
     speaker: string,       // VOICEVOX: style id を文字列で("3")。Piper: 声の名前(.onnx の basename)。recorded: "" 可(TTS エンジンは必須)
@@ -197,7 +234,7 @@ ScriptLine = {                                 // [v2]
   },
   offsetSec: number >= 0,      // hook/cta: セクション開始からの遅延。main: この行の前に入れる追加の間
   audioPath?: "tts/<lineId>.wav", durationSec?: number,
-  captions: { text, startSec, endSec }[],   // ★行の開始からの相対秒
+  captions: { text, startSec, endSec }[],   // ★行の開始からの相対秒。[v4] text は【強調】マーカー付き(§6.13)
   status: "none" | "ok" | "stale" | "error", error?,
   credit?: string,             // 合成時に server が設定。VOICEVOX は "VOICEVOX:<キャラ名>"。Piper / recorded は無し
   warning?: string,            // [v3] server-owned: 直近の合成の非致命的な問題(whisper 失敗 → 比例配分 など)。次の合成で消える
@@ -215,7 +252,7 @@ ScriptLine = {                                 // [v2]
   featureId の変更は stale にしない。
 - [v3] **録音行**(`voice.engine === "recorded"`): 音声は `voice.sourcePath` を `POST /tts` が変換したもの(§6.10)。
   text は任意(空でも再生対象)。text があれば字幕の文言に使い(タイミングは whisper)、空なら whisper の書き起こしを字幕にする。
-  `hasNarrationInput(line)` = TTS 行は text が空でない / recorded 行は sourcePath がある。
+  `hasNarrationInput(line)` = TTS 行は text が空でない([v4] `stripEmphasis(text).trim()` で判定)/ recorded 行は sourcePath がある。
 - 定数・ヘルパ(`@gas/shared`):
   `DEFAULT_VOICES`(ja: `{ engine: "voicevox", speaker: "3", speed: 1 }` = ずんだもん(ノーマル)/ en: `{ engine: "piper", speaker: "en_US-lessac-medium", speed: 1 }`)、
   `DEFAULT_VOICEVOX_URL`、`DEFAULT_VOICEVOX_SPEAKER`、`DEFAULT_VOICEVOX_CREDIT` (`"VOICEVOX:ずんだもん"`)、`DEFAULT_PIPER_VOICE`、
@@ -226,14 +263,25 @@ ScriptLine = {                                 // [v2]
   `sameVoice(a, b)`、`hasNarrationInput(line)`、`createRecordedVoice(sourcePath?)`、
   `voiceEngineSchema`("voicevox" | "piper" | "recorded"。`ttsEngineSchema` は合成エンジンだけ = 声一覧・試聴用)、
   `verticalModeSchema`、`templateDataSchema` ほか各 zod スキーマ。
+  [v4] `parseEmphasis` / `stripEmphasis` / `hasEmphasis` / `EMPHASIS_COLORS`(§4.4)、`createDefaultIntroData()`、
+  `introClipOrder(project)`(= trailerClipOrder: hook → main)、`introBodyLines(project, lang)`(hook 行 → main 行、配列順。全行)、
+  `seSlotSchema` / `SE_SLOTS`、`seFileIdSchema`、`seSettingsSchema`、`DEFAULT_SE`、`SE_PLACEHOLDER_DIR` ("_placeholder")、
+  `SE_PLACEHOLDER_FILES`(slot → "_placeholder/<pop|headline|point|info|transition|cta>.wav")、`SE_TEMPLATES` / `templateUsesSe(id)`、
+  `collectSeCredits(project, seFiles?)`、`introDataSchema`、`langLineRefSchema`。
 - **VOICEVOX のクレジット**: VOICEVOX の声を使った動画には「VOICEVOX:<キャラ名>」の表記が必要。
   web は `collectCredits(project, lang, voices)` を書き出しパネル等に表示し、注意を促す。
   [v3] `voices`(`GET /api/tts/voices?engine=voicevox` の結果。`{ speaker, credit? }[]` なら何でも可)を渡すと、
   未合成で `credit` の無い VOICEVOX 行も speaker から引いて含める(web 側の重複実装は不要になる)。
+  [v4] `collectCredits(project, lang?, voices?, seFiles?)` は **SE のクレジットも含める**(`collectSeCredits`):
+  SE を出すテンプレート(`templateUsesSe`)で `audio.se.enabled` かつ volume > 0 のとき、スロットに割り当てたファイルの credit
+  (`seFiles` = `GET /api/se` の `files` を渡せばそれ、無ければ `audio.se.credits` スナップショット)。言語に依存しない。
+  EndCard は `collectCredits(project, lang)`(スナップショット)なので、OtoLogic 等のクレジットは書き出し動画のエンドカードにも出る。
 - API 型: `packages/shared/src/api.ts`(Phase 1 の型 + [v2] `AddSourceResponse`, `AnalyzeStartResponse`,
   `TtsStatusResponse`, `TtsVoice`, `ttsVoicesQuerySchema`, `TtsSynthesizeRequest`, `TtsPreviewRequest`
   + [v3] `RenderTarget`, `RenderBatchRequest`, `RenderBatchResponse`, `RenderFile`, `RenderListResponse`, `BgmAnalyzeStartResponse`,
-  `RenderJob.createdAt?`, `TtsStatusResponse.whisper.multilingual?`)。
+  `RenderJob.createdAt?`, `TtsStatusResponse.whisper.multilingual?`
+  + [v4] `SE_EXTS`, `seManifestSchema`/`SeManifest`, `seFileSchema`/`SeFile`, `seListResponseSchema`/`SeListResponse`,
+  `seManifestUpdateRequestSchema`/`SeManifestUpdateRequest`)。
 
 ### 4.1 v1 → v2 マイグレーション(`migrateProject`)
 - `game.releaseText: string` → `{ ja: s, en: s }`
@@ -248,6 +296,26 @@ ScriptLine = {                                 // [v2]
   テロップ 2 件: 運命に抗え(afterClipIndex 1)/ すべてを賭けろ(3)、beatSync true、logoReveal true。id は固定 `feat_1..3` / `card_1..2`)
 - `style.vertical` が無ければ `{ mode: "blur" }`
 - その他の追加は任意フィールドのみ(変換なし)。v1 は v1→v2→v3 と順に通る。
+
+### 4.3 v3 → v4 マイグレーション [v4]
+- `templateData.intro` が無ければ `createDefaultIntroData()`:
+  見出し ja「このゲーム\n【神すぎる】んだが！」/ en「This game is\n【INSANELY GOOD】」、kicker 今話題 / TRENDING、
+  情報カード(enabled、4 行: ジャンル アクション / 価格 1,500円 / 対応機種 PC(Steam) / 発売日 2026年冬、en も同様、durationSec 4、atLineId 無し)、
+  ポイント 3 件(【爽快】なアクション / 毎回変わる【ステージ】/ やり込み要素が【無限】、lineId 無し)、clipPerLine true。id は固定 `info_1..4` / `point_1..3`。
+- `audio.se` が無ければ `DEFAULT_SE`(enabled, volume 0.7, 全スロット = プレースホルダ)。既存テンプレートは SE イベントを出さないので音は変わらない。
+- `style.emphasisColor` が無ければ "#FFE14D"。
+- 既存テキスト中の【】はそのまま強調マークアップとして扱われる(変換なし)。v1/v2 は順に通る。
+
+### 4.4 強調ワード(【】)[v4]
+- 対象: 台本 `line.text`、字幕(`line.captions[].text`, `project.captions[lang][].text`)、intro の headline / points / info の value。
+  (`texts.hook` / `texts.cta` やテロップ・魅力見出しは今回は対象外 = そのまま表示。テンプレートが `RichText` を使えば対応できる)
+- 書式: `【…】` で囲んだ部分が強調。**【 と 】は常にマークアップで、画面には出さず読み上げない。**
+  ネスト不可(強調中の【は捨てる)、対応しない】は捨てる、閉じない【は文末まで強調。改行 `\n` は保持。エスケープは無い。
+- `parseEmphasis(text) => { text, emph }[]`(マーカー除去・隣接併合・空は除く)、`stripEmphasis(text)`(【】を除去 = TTS 入力・照合用)、
+  `hasEmphasis(text)`。
+- 描画(`common/RichText`): 強調部分は色 `style.emphasisColor`、大きさ `EMPHASIS_SCALE` = 1.15em。日本語は字幕と同じ文節単位の改行
+  (`jaPhrases` を stripEmphasis 後の文に適用し、文節の中で強調部分を色分け)。【】が無い文は v3 と同じ DOM(字幕の見た目は不変)。
+  テンプレートは `<RichText text lang emphasisColor emphasisScale? emphasisStyle? />` と `estimateRichEm(text)`(幅の目安)を使える。
 
 ## 5. Compositions パッケージ API(`@gas/compositions`)
 
@@ -267,6 +335,9 @@ export type PlacedNarration = {
 };
 export function assetUrl(baseUrl, projectId, relPath): string;
 export function sourceUrl(baseUrl, project, sourceId, useProxy): string;
+export function seFileUrl(baseUrl, fileId): string;   // [v4] "<base>/api/se/file/<id>"(§6.12)
+export function buildSeSchedule(...): ScheduledSe[];   // [v4] §5.9(web は通常使わない)
+export type { SeEvent, ScheduledSe }; export const SE_MAX_SEC;  // [v4]
 export const COMPOSITION_ID = "AdVideo";
 
 // [v3] 構成バー用。どのテンプレートでも同じ形
@@ -286,7 +357,7 @@ export { HOOK_SEC, END_CARD_SEC, MAX_HOOK_SEC, MAX_END_CARD_SEC };   // hook-pla
 
 - [v3] `calcAdMetadata` / `getSectionDurations` / `buildNarrationPlan` / `<AdVideo>` はすべて
   `getTemplate(project.template).buildTimeline(project, fps, lang)` を通る。web は構成バーを `sections` から汎用に描く
-  (`kind` で色分け、`label` を表示)。hook-play-cta では sections = [hook "フック", main "本編", end "エンド"]。
+  (`kind` で色分け、`label` を表示)。hook-play-cta では sections = [hook "フック", main "本編", end "エンド"]。[v4] intro は §5.8。
 - `calcAdMetadata` / `<AdVideo>` / `buildNarrationPlan` は同じタイムライン計算を共有し、必ず一致させる。
   `Root` の `calculateMetadata` は `calcAdMetadata(props.project, props.format, props.lang)`。
 - web は `buildNarrationPlan(...).overflowLineIds` で「ナレーションが入りきらない」警告を出す。
@@ -298,7 +369,7 @@ export { HOOK_SEC, END_CARD_SEC, MAX_HOOK_SEC, MAX_END_CARD_SEC };   // hook-pla
 
 ### 5.1 ナレーションのタイムライン規則 [v2](テンプレート `hook-play-cta`)
 
-対象は `script` のうち `lang === props.lang`、`text.trim() !== ""`([v3] recorded 行は text 不要)、`audioPath` と `durationSec` を持つ行
+対象は `script` のうち `lang === props.lang`、`text.trim() !== ""`([v3] recorded 行は text 不要。[v4] `stripEmphasis(text).trim()` で判定)、`audioPath` と `durationSec` を持つ行
 (status が stale/error でも音声があれば使う)。= `common/narrationLayout.ts` の `playableLines()`。全テンプレート共通。
 hook-play-cta では `featureId` は無視(普通の main 行)。
 
@@ -321,6 +392,9 @@ hook-play-cta では `featureId` は無視(普通の main 行)。
 - 位置 `bottom` / `center`、サイズ `m` / `l`。
 - [v3] 字幕・ナレーション・BGM・ダッキングは `<AdVideo>` が全テンプレート共通で描く(テンプレートは映像だけ)。
   9:16 の `bottom`: blur モードは映像下の帯の中、crop モードは画面下端から 16% 上(ショート動画アプリの UI を避ける)。
+- [v4] 字幕の【強調】は §4.4 のとおり色 `style.emphasisColor`・1.15 倍で描き、括弧は出さない(全テンプレート共通、【】が無ければ見た目は v3 と同一)。
+- [v4] テンプレートは `TemplateTimeline.captionLayout` で字幕の配置を上書きできる: `scale`(フォントサイズ倍率、既定 1)、
+  `verticalMode`(9:16 の配置計算に使うモード。intro は "blur" = 中央の 16:9 帯の下の帯に置く。project の vertical.mode より優先)。
 
 ### 5.3 音声ミックスとダッキング [v2]
 - **ナレーション**: `<Audio>` 音量 = `audio.narrationVolume`。
@@ -330,6 +404,7 @@ hook-play-cta では `featureId` は無視(普通の main 行)。
   `loop: true` なら動画全体をループで埋め、false なら 1 回だけ。末尾 `fadeOutSec` でフェードアウト(先頭は短いフェードイン可)。
 - ダッキングの切り替えは急変させず、前後 ~0.2 秒(`Math.round(0.2*fps)` フレーム)で補間する。
 - 音量は Remotion の `volume` コールバック(フレーム関数)で実装する。
+- [v4] **効果音**: 音量 `audio.se.volume × イベントの gain`。ダッキングしない(ナレーション・BGM・ゲーム音の計算にも影響しない)。§5.9。
 
 ### 5.4 テンプレートモジュールとレジストリ [v3]
 
@@ -339,7 +414,11 @@ type TemplateTimeline = {
   fps: number; totalFrames: number;
   sections: TimelineSectionInfo[];   // 再生順・隙間なし・[0, totalFrames) を覆う
   narration: NarrationPlan;          // この lang のナレーション配置(common/narrationLayout.ts の型)
+  seEvents?: SeEvent[];              // [v4] 効果音イベント(絶対フレーム + スロット、§5.9)。無し = なし
+  captionPopSe?: boolean;            // [v4] true: 字幕チャンクの出現ごとに "captionPop" を鳴らす(<AdVideo> が中央で計算)
+  captionLayout?: { scale?: number; verticalMode?: VerticalMode };  // [v4] 字幕配置の上書き(§5.2)
 };
+type SeEvent = { frame: number; slot: SeSlot; gain?: number /*0..1, 既定 1*/ };   // [v4] common/SeTrack
 type TimelineSectionInfo = { id: string; kind: SectionKind; label: string /*日本語 UI ラベル*/; from: number; durationInFrames: number };
 type TemplateRenderProps<T> = { project; format; lang; assetBaseUrl; useProxy; timeline: T };
 type TemplateModule<T extends TemplateTimeline = TemplateTimeline> = {
@@ -350,13 +429,13 @@ type TemplateModule<T extends TemplateTimeline = TemplateTimeline> = {
 function defineTemplate<T>(m: TemplateModule<T>): TemplateModule;  // レジストリ用に型を消す
 
 // templates/index.ts
-const TEMPLATES: Record<TemplateId, TemplateModule>;  // hook-play-cta / features / trailer
+const TEMPLATES: Record<TemplateId, TemplateModule>;  // hook-play-cta / features / trailer / [v4] intro
 function getTemplate(id: TemplateId): TemplateModule;
 ```
 
 - 各テンプレートは `templates/<name>/index.ts` から 1 つの TemplateModule を export する:
-  `hookPlayCtaTemplate`(`templates/hookPlayCta`)、`featuresTemplate`(`templates/features`)、`trailerTemplate`(`templates/trailer`)。
-- `<AdVideo>` = `DuckContext.Provider` > `AbsoluteFill(黒, BODY_FONT)` > [`<module.Component timeline={tl} …/>`, `<Captions>`, `<Narration>`, `<Bgm>`]。
+  `hookPlayCtaTemplate`(`templates/hookPlayCta`)、`featuresTemplate`(`templates/features`)、`trailerTemplate`(`templates/trailer`)、[v4] `introTemplate`(`templates/intro`)。
+- `<AdVideo>` = `DuckContext.Provider` > `AbsoluteFill(黒, BODY_FONT)` > [`<module.Component timeline={tl} …/>`, `<Captions>`, `<Narration>`, `<Bgm>`, [v4] `<SeTrack>`]。
   テンプレートは字幕・ナレーション・BGM を描かない(`tl.narration` を作るだけ)。
 - 共通部品(`src/common/**`, `common/index.ts` から import 可):
   `ClipTrack`(カット + パンチ + 9:16 blur/crop + ゲーム音ダッキング + プロキシ未準備のプレースホルダ)、`Backdrop`、`EndCard`(全テンプレート共通の
@@ -439,6 +518,80 @@ function getTemplate(id: TemplateId): TemplateModule;
 - テンプレートの大きな文字の置き場所: blur モードでは上下の帯(各 (1920−1080·9/16)/2 ≈ 656px)が空いているのでそこを使ってよい。
   crop モードでは映像の上に重なるので縁取り/影を付け、画面下 16%(字幕)と上端の安全域を避ける。`project.style.vertical.mode` で分岐する。
 
+### 5.8 テンプレート `intro`(紹介動画風)[v4](担当: compositions-intro、`templates/intro/**`)
+
+ナレーション主導のテンポの速い縦型ゲーム紹介ショート。構成: **本文(つかみ → 本編。上に見出し帯・中央に 16:9 プレイ映像・下に大きな字幕)→ エンドカード**。
+現在の `templates/intro` はスタブ(hook-play-cta の描画 + SE/字幕の配線)。以下の規則で置き換える。定数は intro/ 内に定義:
+`BODY_MIN_SEC = 3`, `BODY_TAIL_SEC = 0.4`, `LINE_CLIP_MIN_SEC = 0.6`(= MIN_CLIP_SEC), `TAIL_SPLIT_SEC = 1.0`, `NO_NARRATION_INFO_SEC = 1.0`。
+
+**ナレーション(本文)**
+- 本文行 = `playableLines(project, lang)` のうち section が hook / main のもの。順序 = `introBodyLines` と同じ(hook 行 → main 行、各配列順)。
+- hook 行も main 行も **区別せず順番に連続再生**(hook-play-cta と違い hook 行は独立配置しない): `t = 0` から、各行 `t += offsetSec` → `from = t` → `t += durationSec`。
+  need = 最後の t。行の `section` は PlacedNarration にそのまま入れる(hook / main)。
+- cta 行: エンドカード開始 + offsetSec(§5.4 共通)。featureId は無視。
+- 速度(1.2〜1.3 倍)は台本行の voice.speed で行う(テンプレートは関与しない。web が intro 選択時の新規行の既定を 1.25 にしてよい)。
+
+**長さ**
+- エンドカード: §5.4 共通(3 秒、cta 行に合わせて伸びる。自由: 無制限 / 固定: 最大 5 秒)。`common/EndCard` を使う。
+- 自由(`durationSec === null`): 本文 = need > 0 なら `max(BODY_MIN_SEC, need + BODY_TAIL_SEC)`(**クリップの長さでは伸ばさない**)、
+  ナレーションが無ければ `max(BODY_MIN_SEC, 使えるクリップの自然長の合計)`。何も切らない。
+- 固定(15 / 30): 本文 = durationSec − エンドカード。本文末を越える行は本文末で切り、開始が本文末以降の行は落とす(`placeSection(…, fixed=true)` と同じ)→ `overflowLineIds`。
+  合計はちょうど durationSec。
+- sections: hook {kind "hook", id "hook", label "つかみ"} = [0, 最後に配置された hook 行の終わり)(hook 行が無い/0 フレームなら省く)、
+  main {kind "main", id "main", label "本編"} = 本文の残り、end {kind "end", id "end", label "エンド"}。空プロジェクトでも 1 フレーム以上。
+
+**クリップ(中央の 16:9 帯)**
+- クリップ列 = `introClipOrder(project)`(hook スロット → main スロット、各配列順)から使えないもの(未知 sourceId)を除いた n 本。
+  プレビューでプロキシ未準備のクリップも尺計算には含める(描画は ClipTrack の規則どおり)。
+- `clipPerLine === true` かつ本文行が 1 本以上: 切り替え点 b_0 = 0、b_k = 本文行 k の from(k ≥ 1)。本文行 k の区間 [b_k, b_{k+1})
+  (最後の行は行の終わりまで)にクリップ `clips[j % n]` を clip.inSec から再生(区間が自然長より長ければ outSec の先へ延長、素材末で最終フレーム保持 =
+  `fitSegments` と同じ扱い)。j は「切り替えた回数」: 区間が `LINE_CLIP_MIN_SEC` 未満の行では切り替えず前のクリップを続ける(j を進めない)。
+  最後の行の終わり〜本文末の残り: `TAIL_SPLIT_SEC` 以下なら最後の区間を延ばす。それより長ければ続きのクリップ(j+1, j+2, …)を自然長
+  (最短 MIN_CLIP_SEC)で並べ、最後の 1 本が残りを埋める。
+- `clipPerLine === false` またはナレーション無し: 全クリップを順に `fitSegments(toSegments(clips), 本文フレーム数, MIN_CLIP_SEC*fps, "intro")` で敷く。
+- クリップ 0 本: 帯の中に `Backdrop`(または `NoFootage`)。ゲーム音は ClipTrack のダッキング規則どおり。
+
+**見出し帯・情報カード・ポイント**
+- 見出し帯: 本文 [0, 本文末) の間ずっと表示(エンドカード中は出さない)。kicker(`stripEmphasis` した全体をバッジで)+ `headline[lang]`
+  (`RichText`、【強調】・改行対応)。headline[lang] が空ならゲームタイトルを出す。frame 0 で登場アニメ + SE "headline"。
+- 情報カード(`info.enabled` かつ label か value が空でない行が 1 つ以上): 開始 = `atLineId[lang]` の行が本文に配置されていればその from、
+  無ければ本文 2 行目の from、1 行しか無ければ 1 行目、ナレーション無しなら `round(NO_NARRATION_INFO_SEC*fps)`(本文がそれより短ければ 0)。
+  表示 = [開始, min(開始 + round(durationSec*fps), 本文末))。value が空の行は出さない。label/value は言語別、value は RichText。SE "info" を開始時に。
+- ポイント(`text[lang]` が空でない項目。番号 ①②③… は表示する項目の中での順番):
+  - bound: `lineId[lang]` が本文に配置された行 → その行の再生中 [from, from + durationInFrames) にバッジ表示。
+  - unbound(lineId 無し/無効): 候補行 = 配置された **main** 行のうち、bound ポイントの行でも情報カードの開始行でもないもの(再生順)。
+    k 番目の unbound ポイント → k 番目の候補行。候補が足りないポイントは出さない(web が注意を出してよい)。
+  - ナレーション無し: 情報カードの後(無ければ 0)〜本文末を表示ポイント数で等分。
+  - 新しいポイントが出たら前のポイントは消す(または小さく残す — 見た目は担当の裁量)。各ポイントの開始で SE "point"。
+- ウォーターマークは出さない(見出し帯が担う)。`texts[lang].hook` は使わない。
+
+**効果音(`seEvents`)**: "headline" @ 0、"transition" @ 本文内でクリップが実際に切り替わる各フレーム(> 0)、"info" @ 情報カード開始、
+"point" @ 各ポイント開始、"cta" @ エンドカード開始。`captionPopSe: true`(字幕チャンクごとの pop は <AdVideo> が付ける)。
+gain は担当の裁量(例: transition 0.7)。同じフレーム・同じスロットは 1 つにまとめられる。
+
+**レイアウト 9:16(1080×1920)**: `style.vertical.mode` は無視(常にこのレイアウト、focusX は使わない)。
+- 上: 見出し帯 y ∈ [0, 656)。上端 ~120px はアプリ UI 用の安全域。背景はテーマ色の帯 or 同じ映像のぼかし(担当の裁量)。
+- 中央: 16:9 プレイ映像 1080×608、y ∈ [656, 1264)(= blur モードの映像位置と同じ)。情報カード・ポイントバッジはこの帯の上か近くに重ねる。
+- 下: 字幕(共通 `<Captions>`)。`captionLayout = { verticalMode: "blur", scale: 1.15〜1.3 }` で帯の下 [1264+30, 1920−150) に大きく出る。
+  テンプレートはこの領域に他の要素を置かない。
+**レイアウト 16:9(1920×1080)**(破綻しないこと): 映像は全面(ClipTrack cover)、見出しは上部の半透明バー(高さ 22% 以内、文字は小さめ)、
+字幕は共通の下部(scale はそのまま)、情報カードは右側パネル、ポイントは見出しの下・左側。
+
+### 5.9 効果音(SE)[v4](共通: `common/SeTrack.tsx`、URL: `common/urls.ts` の `seFileUrl`)
+- スロット(`SE_SLOTS`): `captionPop`(字幕の出現)/ `headline`(見出し・タイトル)/ `point`(ポイント)/ `info`(情報カード)/
+  `transition`(場面転換)/ `cta`(エンドカード)。`audio.se.slots[slot]` = SE ライブラリのファイル id(無し = 無音)。
+- テンプレートは **イベントを出すだけ**(`timeline.seEvents`、絶対フレーム)。<AdVideo> が `buildSeSchedule(project, tl.seEvents, captionItems, tl.captionPopSe, totalFrames, fps)`
+  で解決して `<SeTrack>` で鳴らす(テンプレートは SE の <Audio> を自分で置かない)。
+- `buildSeSchedule`: `audio.se.enabled` が false か volume 0 なら空。`captionPopSe` なら字幕アイテム(ナレーション字幕チャンク + 手動字幕、
+  字幕 off なら無し)の開始ごとに captionPop を足す — ただしテンプレートのイベントから ±`SE_POP_SUPPRESS_SEC`(0.1 秒)以内なら足さない。
+  ファイル未割当のスロット・[0, totalFrames) 外は捨て、(frame, slot) で重複除去、frame 順。
+- `<SeTrack>`: 1 イベント = `<Sequence from={frame} durationInFrames={min(SE_MAX_SEC(4 秒), 残り)} layout="none"><Audio src={seFileUrl(assetBaseUrl, id)} volume={se.volume*gain}/>`。
+- caption pop を中央(<AdVideo>)で付ける理由: 字幕アイテムは <AdVideo> が作るため(テンプレートが字幕を再計算しなくてよい)。テンプレートは opt-in するだけ。
+- **SE を出すのは `SE_TEMPLATES`(@gas/shared、現在 ["intro"])のテンプレートだけ**。他テンプレートは seEvents/captionPopSe を出さない(既存の音は不変)。
+  collectCredits もこの一覧で SE クレジットの要否を決める。
+- レンダー時、ライブラリに存在しないファイルのスロットは server(render.ts の `dropMissingSe`)がスナップショットから外す(404 でレンダーが落ちないように)。
+  プレビューでは web が `GET /api/se` の一覧に無いファイルを割り当て済みスロットに警告表示する。
+
 ## 6. Server HTTP API(`@gas/server`, port 3101)
 
 - JSON API。エラーは常に `{ error: string }` + ステータス(400 / 404 / 409 / 500 / 501 / 503)。
@@ -465,6 +618,10 @@ function getTemplate(id: TemplateId): TemplateModule;
 | POST | `/api/projects/:id/render-batch` | `RenderBatchRequest` | **[v3] `RenderBatchResponse` `{ jobIds }`**(§6.9、実装済み) |
 | GET | `/api/projects/:id/renders` | — | **[v3] `RenderListResponse` `{ files, jobs }`**(§6.9、実装済み) |
 | POST | `/api/projects/:id/bgm/analyze` | — | **[v3] 202 `Project`**(§6.11、ルート実装済み・検出本体は server 担当) |
+| GET | `/api/se` | — | **[v4] `SeListResponse` `{ dir, exists, files }`**(§6.12、実装済み) |
+| POST | `/api/se/rescan` | — | **[v4] `SeListResponse`**(キャッシュ破棄 + 欠けた仮 SE の再生成) |
+| PUT | `/api/se/manifest` | `SeManifestUpdateRequest` | **[v4] `SeListResponse`**(クレジットをマージ) |
+| GET | `/api/se/file/*path` | — | **[v4] SE ファイル(Range 対応、no-cache)** |
 
 ### 6.1 ソース登録 [v2: 非同期]
 1. path の存在確認(無ければ 400)→ ffprobe(読めなければ 400)。durationSec/fps/width/height/hasAudio はこの時点で確定。
@@ -557,6 +714,7 @@ config = {
   voicevox: { url: "http://127.0.0.1:50021", enginePath?: string },
   piper:    { exePath: "D:\\Tools\\piper\\piper.exe", voicesDir: "D:\\Tools\\piper\\voices" },
   whisper:  { dir: "D:\\Tools\\whisper", model: "base.en", multilingualModel: "small" },   // [v3] multilingualModel
+  se:       { dir: "D:\\Tools\\se" },   // [v4] SE ライブラリ。環境変数 GAS_SE_DIR が優先(テスト用)
 }
 resolveVoicevoxEnginePath(): Promise<string | null>
   // enginePath があればそれ(存在しなければ null)。無ければ D:\Tools\voicevox 以下の run.exe を探す
@@ -599,6 +757,41 @@ resolveVoicevoxEnginePath(): Promise<string | null>
 - web: BGM をアップロードしたら自動で解析を開始してよい(または「ビート解析」ボタン)。running の間 GET をポーリング。bpm と状態を表示。
 - 起動時リカバリは §6.1。
 
+### 6.12 SE ライブラリ [v4](実装済み: `routes/se.ts` + `se/**`。以後 server 担当)
+- 場所: `config.se.dir`(既定 `D:\Tools\se`、`gas.config.json` の `se.dir` / 環境変数 `GAS_SE_DIR`)。**リポジトリ外**。ユーザーが効果音ラボ・OtoLogic などの
+  フリー素材を好きなサブフォルダに置く。リポジトリにも配布物にも含めない(`.gitignore` で音声拡張子を除外済み)。
+- ファイル id = ライブラリからの相対パス、区切り `/`(`seFileIdSchema`: `..`・先頭 `/`・ドライブ文字・`\`・ドット始まりのセグメント不可)。
+  対象拡張子 `SE_EXTS` = .wav .mp3 .ogg .m4a .aac。一覧は再帰(深さ 6、ドット始まりは除外、最大 2000 件)、id 昇順。
+- **仮 SE**: `_placeholder/{pop,headline,point,info,transition,cta}.wav`(ffmpeg の aevalsrc で合成、48kHz mono、ピーク -1 dBFS)。
+  server 起動時(`initSeLibrary()`)と rescan で **無いものだけ** 生成(`se/placeholders.ts`)。`DEFAULT_SE` は全スロットをこれに割り当てる。
+- **マニフェスト** `<se.dir>/se.json`: `{ "version": 1, "files": { "<id>": { "credit": "効果音:OtoLogic" } } }`(`seManifestSchema`)。
+  無ければ起動時に空で作る。壊れていたら空として扱う(警告ログ)。書き込みは一時ファイル → rename、直列化。
+- `GET /api/se` → `{ dir, exists, files: { id, name, durationSec (ffprobe、(size, mtime) でキャッシュ、不明は 0), credit? }[] }`。
+- `POST /api/se/rescan` → 長さキャッシュを捨て、仮 SE / se.json を補ってから一覧を返す(ユーザーがファイルを追加した後に押す)。
+- `PUT /api/se/manifest` body `{ credits: { "<id>": "<credit>" } }` → se.json の該当 id にマージ(`""` = クレジット削除)→ 一覧を返す。
+  id の形式は検証する(存在は問わない)。
+- `GET /api/se/file/*path` → ファイル(`sendFileWithRange`、`Cache-Control: no-cache`)。不正 id / 拡張子 → 400、無い → 404。
+  URL は `seFileUrl(baseUrl, id)`: プレビュー `/api/se/file/<id>`(相対、Vite プロキシ)、レンダー `http://localhost:<LISTEN_PORT>/api/se/file/<id>`。
+- **クレジット**: project 側は `audio.se.credits`(スナップショット)。web は `GET /api/se` を読んだ時・スロットを変えた時・マニフェストを
+  編集した時に「スロットに割り当てたファイルの credit」だけを入れ直して保存する(PUT は body が正 = web-owned)。
+  UI 表示では `collectCredits(project, lang, voices, seFiles)` で最新値を使う。レンダー/EndCard はスナップショットを使う。
+- render.ts は書き出し開始時に、存在しないファイルのスロットをスナップショットから外す(ログを出す)。
+
+### 6.13 TTS と強調ワード [v4](server 担当: `tts/**`, `routes/tts.ts`)
+- 合成(VOICEVOX / Piper)と `POST /api/tts/preview` の入力は **`stripEmphasis(text).trim()`**(【】は読まない)。
+  対象行の選択(`hasNarrationInput`)も stripEmphasis 後で判定。**server は `line.text` を書き換えない。**
+- 字幕 `line.captions[].text` は **元の text(【】付き)の部分文字列** にする:
+  - 各チャンクの `stripEmphasis(chunk.text)` をつなげると `stripEmphasis(text)` の読み上げ部分と一致する(従来どおり空白・句読点の扱いは自由)。
+  - マーカーはチャンクごとに閉じる: 強調がチャンク境界をまたぐときは前のチャンク末で 】 を補い、次のチャンク頭で 【 を補う
+    (例: 「これは【めちゃくちゃ面白い】ゲーム」→「これは【めちゃくちゃ】」「【面白い】ゲーム」)。
+  - チャンク分割はできるだけ強調の途中で切らない(強調部分を 1 つの塊として扱い、最大長を超える場合だけ分ける)。
+  - 例: text「このゲーム【神すぎる】んだが！」→ captions `[{ text: "このゲーム【神すぎる】", … }, { text: "んだが！", … }]`(または 1 チャンク)。
+- ja(VOICEVOX): audio_query のモーラ列は stripEmphasis 後の文に対応する。文字位置の対応表(元 text ↔ stripped)でチャンク境界を元 text に写して 【】 を戻す。
+- en(Piper + whisper): 単語合わせは stripped の単語で行い、元 text で強調内にあった単語の前後に 【 】 を戻す。
+- 録音行: text があればそれ(【】付き)を字幕の文言に使い、whisper の書き起こしとの照合(一致率チェック)は stripEmphasis 後で行う。
+  text が空なら書き起こし(強調なし)。
+- 字幕の表示側(共通 `<Captions>`)は【】を色付きで描き、括弧は出さない(§4.4)。
+
 ## 7. Web(`@gas/web`, Vite :5173)
 
 - API は相対 URL、型は `@gas/shared`。プレビューは `calcAdMetadata(project, format, lang)`(**[v2] lang 追加**)。
@@ -628,6 +821,20 @@ resolveVoicevoxEnginePath(): Promise<string | null>
     録音の差し替え/ text 変更で stale。試聴は録音ファイルそのもの(`/files/...`)を再生。速度欄は隠す。
   - `line.warning` があれば行に注意アイコン+文言。クレジットは `collectCredits(project, lang, voicevoxVoices)`(独自実装は削除)。
   - TTS 状態に `whisper.multilingual` を表示(あれば)。
+- [v4] 画面に追加/変更するもの(web 担当、`apps/web/src/**`):
+  - テンプレート選択に「紹介動画風」(`intro`)を追加(`TEMPLATE_INFO` / アイコン)。intro を選んだら 9:16 プレビューを推奨表示。
+    (step 1 で `ClipList` / `ProjectList` の Record に intro のラベルだけ足してある。文言は自由に変えてよい)
+  - intro 設定パネル: 見出し(`headline[lang]`、複数行、【】の挿入ボタン)、kicker、情報カード(enabled、行の追加・削除・並べ替え、label/value を言語別、
+    表示開始行 `atLineId[lang]` = `introBodyLines(project, lang)` から選ぶ/「自動(2 行目)」、durationSec)、
+    ポイント(追加・削除・並べ替え、最大 5、text を言語別、紐付け行 `lineId[lang]`/「自動」)、clipPerLine のトグル。
+  - 強調: 台本・字幕の入力欄に「選択範囲を【】で囲む」ボタン(またはショートカット)。強調色 `style.emphasisColor`(`EMPHASIS_COLORS` の黄/赤 + 任意色)。
+    【】を含む行の text 変更も通常どおり stale。
+  - 効果音パネル: `audio.se.enabled` / `volume`、スロットごとにライブラリのファイルを選択(`GET /api/se`、試聴 = `/api/se/file/<id>` を再生、「なし」)、
+    ライブラリ一覧(id・長さ・クレジット編集 = `PUT /api/se/manifest`、「再読み込み」= `POST /api/se/rescan`、ライブラリの場所 `dir` を表示し
+    「効果音ラボ・OtoLogic などのフリー素材をこのフォルダに置く」案内)。一覧に無いファイルが割り当てられていたら警告。
+    `audio.se.credits` スナップショットを §6.12 のとおり同期する。SE は intro でのみ鳴る旨を表示。
+  - クレジット表示は `collectCredits(project, lang, voicevoxVoices, seFiles)`。
+  - intro では「ポイントに割り当てる行が足りない」「情報カードの開始行が見つからない」などを注意表示してよい(テンプレートの規則は §5.8)。
 - 保存は `PUT /api/projects/:id` に Project 全体(デバウンス)。サーバーが返した Project で state を置き換える
   (ただし編集中の入力を巻き戻さないよう注意。ポーリング結果と保存の競合は §6.2 のマージで server 側が吸収する)。
 
@@ -640,3 +847,6 @@ resolveVoicevoxEnginePath(): Promise<string | null>
    `inputProps = { project: migrateProject(json), format, lang, assetBaseUrl, useProxy: false }` を渡す。
    素材は 3101 を使わず、自分で立てた静的サーバー(例: 3199、`/files/<pid>/<rel>` と `/api/projects/<pid>/sources/<sid>/original` を返す)から配信するとよい。
    hook-play-cta の出力は Phase 3 の再構成前後でピクセル一致を確認済み。
+   [v4] 静的サーバーで `/api/se/file/<id>` も `D:\Tools\se` から返すとよい(静止画では音声は読まれない)。
+   hook-play-cta / features / trailer の静止画は Phase 3.5 の共通部品変更(字幕の強調対応・SE)の前後でピクセル一致を確認済み。
+5. [v4] SE の確認: `renderMedia({ codec: "wav" })` で音声だけ書き出せば速い(assetBaseUrl は SE を返せるサーバー)。

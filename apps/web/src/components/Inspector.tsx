@@ -87,6 +87,8 @@ export function Inspector(props: {
           hint={
             project.template === "trailer"
               ? "トレーラー風では使いません(構成タブのテロップを使います)"
+              : project.template === "intro"
+                ? "紹介動画風では使いません(構成タブの見出し帯を使います)"
               : project.template === "features"
                 ? "タイトルと一緒に冒頭に出る一言"
                 : "冒頭に大きく出る一言"

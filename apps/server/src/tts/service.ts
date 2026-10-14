@@ -5,6 +5,7 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import {
   DEFAULT_PIPER_VOICE,
+  stripEmphasis,
   type Caption,
   type ScriptLine,
   type TtsEngine,
@@ -142,7 +143,9 @@ async function convertRecording(projectId: string, line: Pick<ScriptLine, "id" |
     const durationSec = await audioDuration(out);
 
     let captions: Caption[];
-    const text = line.text.trim();
+    // v4 (§6.13): 【】 are not spoken -> compare the transcript with the stripped text; captions keep the markers
+    const text = line.text;
+    const spoken = stripEmphasis(text).trim();
     try {
       if (tooQuiet) throw new Error(`録音がほぼ無音です (peak ${Number.isFinite(peak) ? peak.toFixed(1) : "-inf"} dBFS)`);
       const w16 = path.join(tmp, "w16k.wav");
@@ -151,19 +154,19 @@ async function convertRecording(projectId: string, line: Pick<ScriptLine, "id" |
       if (line.lang === "ja") {
         const segs: TimedSegment[] = await whisperJaSegments(w16);
         transcript = segs.map((s) => s.text).join(" ");
-        checkTranscript(text, transcript);
+        checkTranscript(spoken, transcript);
         captions = buildRecordedJaCaptions(text, durationSec, segs);
       } else {
         const words: WordTiming[] = await whisperWords(w16);
         transcript = words.map((w) => w.text).join(" ");
-        checkTranscript(text, transcript);
-        captions = buildEnCaptions(text || transcript, durationSec, words);
+        checkTranscript(spoken, transcript);
+        captions = buildEnCaptions(spoken ? text : transcript, durationSec, words);
       }
     } catch (e) {
       const msg = (e as Error).message.slice(0, 300);
       captions = line.lang === "ja" ? buildRecordedJaCaptions(text, durationSec, null) : buildEnCaptions(text, durationSec, null);
       warnings.push(
-        text
+        spoken
           ? `字幕のタイミングを取得できませんでした(文字数で比例配分): ${msg}`
           : `字幕を作成できませんでした(テキストが空): ${msg}`,
       );
@@ -186,7 +189,8 @@ export async function synthesizeLine(projectId: string, line: Pick<ScriptLine, "
   const rel = `tts/${line.id}.wav`;
   const dest = path.join(ttsDir, `${line.id}.wav`);
   const tmpOut = path.join(ttsDir, `.${line.id}.${nanoid(6)}.tmp.wav`);
-  const text = line.text.trim();
+  // v4 (§6.13): the engines read stripEmphasis(text); captions are built from the original text (markers kept)
+  const text = stripEmphasis(line.text).trim();
   try {
     if (line.voice.engine === "recorded") {
       const r = await convertRecording(projectId, line, tmpOut);
@@ -204,7 +208,7 @@ export async function synthesizeLine(projectId: string, line: Pick<ScriptLine, "
         return audioDuration(tmpOut);
       });
       await replaceFile(tmpOut, dest);
-      return { audioPath: rel, durationSec, captions: buildJaCaptions(text, query, durationSec), credit };
+      return { audioPath: rel, durationSec, captions: buildJaCaptions(line.text, query, durationSec), credit };
     }
     return await withTmpDir(async (tmp) => {
       await piperSynthesize(text, line.voice.speaker, line.voice.speed, tmpOut, tmp);
@@ -222,7 +226,7 @@ export async function synthesizeLine(projectId: string, line: Pick<ScriptLine, "
         console.warn(`[tts] ${line.id}: ${warning}`);
       }
       await replaceFile(tmpOut, dest);
-      const out: LineSynthesis = { audioPath: rel, durationSec, captions: buildEnCaptions(text, durationSec, words) };
+      const out: LineSynthesis = { audioPath: rel, durationSec, captions: buildEnCaptions(line.text, durationSec, words) };
       if (warning) out.warning = warning;
       return out;
     });
@@ -231,8 +235,9 @@ export async function synthesizeLine(projectId: string, line: Pick<ScriptLine, "
   }
 }
 
-/** WAV bytes for a preview (nothing stored, no captions). */
-export async function previewWav(voice: Voice, text: string): Promise<Buffer> {
+/** WAV bytes for a preview (nothing stored, no captions). v4: emphasis markers are not read. */
+export async function previewWav(voice: Voice, rawText: string): Promise<Buffer> {
+  const text = stripEmphasis(rawText);
   if (voice.engine === "recorded") throw new InvalidVoiceError("Preview is only available for TTS engines (not recorded lines)");
   if (voice.engine === "voicevox") {
     await voicevoxCredit(voice.speaker); // validates the style id (InvalidVoiceError)

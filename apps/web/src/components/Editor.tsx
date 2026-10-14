@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { generateId, hasNarrationInput, trailerClipOrder, type Clip, type Format, type Lang, type Project, type Source } from "@gas/shared";
+import { generateId, hasNarrationInput, templateUsesSe, trailerClipOrder, type Clip, type Format, type Lang, type Project, type Source } from "@gas/shared";
 import { calcAdMetadata } from "@gas/compositions";
 import { api, ApiError } from "../api";
 import { insertClip } from "../autoArrange";
 import { useHealth } from "../hooks/useHealth";
 import { useProject, type SaveState } from "../hooks/useProject";
+import { useSeCreditsSync } from "../hooks/useSeLibrary";
+import { introWarnings } from "../introPlan";
 import { navigate } from "../hooks/useHashRoute";
 import { basename, cx } from "../util";
 import { AudioPanel } from "./AudioPanel";
@@ -63,6 +65,9 @@ export function Editor({ projectId }: { projectId: string }) {
   const [cue, setCue] = useState<MarkerCue | null>(null);
   const [activeCandId, setActiveCandId] = useState<string | null>(null);
   const [hoverCandId, setHoverCandId] = useState<string | null>(null);
+
+  // v4: keep audio.se.credits (snapshot used by renders / the end card) in sync with the SE library (§6.12).
+  useSeCreditsSync(project, update, !!project && templateUsesSe(project.template));
 
   // Reload the project once the server comes back after a failed load.
   const { reload, loadError } = store;
@@ -397,8 +402,8 @@ export function Editor({ projectId }: { projectId: string }) {
             onChange={setRightTab}
             options={[
               { value: "settings", label: "設定" },
-              { value: "structure", label: "構成", badge: structureBadge(project) },
-              { value: "audio", label: "音声", badge: project.audio.bgm ? "BGM" : null },
+              { value: "structure", label: "構成", badge: structureBadge(project, lang) },
+              { value: "audio", label: "音声", badge: audioBadge(project) },
               { value: "style", label: "スタイル" },
             ]}
           />
@@ -415,9 +420,18 @@ export function Editor({ projectId }: { projectId: string }) {
                 serverOk={serverOk}
                 onOpenAudio={() => setRightTab("audio")}
                 onOpenClips={openClips}
+                format={format}
+                setFormat={setFormat}
               />
             ) : rightTab === "audio" ? (
-              <AudioPanel project={project} update={update} mutateOnServer={mutateOnServer} serverOk={serverOk} videoSec={videoSec} />
+              <AudioPanel
+                project={project}
+                update={update}
+                mutateOnServer={mutateOnServer}
+                serverOk={serverOk}
+                videoSec={videoSec}
+                onOpenStructure={() => setRightTab("structure")}
+              />
             ) : (
               <StylePanel project={project} update={update} format={format} setFormat={setFormat} onOpenClips={openClips} />
             )}
@@ -440,12 +454,26 @@ function scriptBadge(project: Project, lang: Lang) {
 /** Index shown in the clip marker ("クリップ N"): position in the slot, or the cut number for the trailer. */
 function editingIndexOf(project: Project, clip: Clip | null): number {
   if (!clip) return -1;
-  if (project.template === "trailer") return trailerClipOrder(project).indexOf(clip);
+  if (project.template === "trailer" || project.template === "intro") return trailerClipOrder(project).indexOf(clip);
   return project.clips.filter((c) => c.slot === clip.slot).indexOf(clip);
 }
 
-/** Warning badge on the 構成 tab: trailer beat sync without beats. */
-function structureBadge(project: Project) {
+function audioBadge(project: Project) {
+  const se = templateUsesSe(project.template) && project.audio.se.enabled && project.audio.se.volume > 0;
+  const parts = [project.audio.bgm ? "BGM" : null, se ? "SE" : null].filter(Boolean);
+  return parts.length ? parts.join("+") : null;
+}
+
+/** Warning badge on the 構成 tab: trailer beat sync without beats / intro lines that cannot be attached. */
+function structureBadge(project: Project, lang: Lang) {
+  const intro = introWarnings(project, lang);
+  if (intro.length) {
+    return (
+      <span className="tab-badge-warn" title={intro.join("\n")}>
+        !
+      </span>
+    );
+  }
   if (project.template !== "trailer" || !project.templateData.trailer.beatSync) return null;
   if ((project.audio.bgm?.beats?.length ?? 0) >= 2) return null;
   return (

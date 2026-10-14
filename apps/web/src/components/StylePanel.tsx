@@ -1,8 +1,10 @@
 import type { CSSProperties } from "react";
+import { EMPHASIS_COLORS } from "@gas/shared";
 import type { CaptionStyle, Format, Project, Style, VerticalMode, Watermark, WatermarkPosition } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import type { UpdateProject } from "../hooks/useProject";
 import { cx } from "../util";
+import { EmphasisText } from "./Emphasis";
 import { Field, Icon, Section, Segmented, Slider, Switch } from "./ui";
 
 const VERTICAL_MODES: { mode: VerticalMode; name: string; desc: string }[] = [
@@ -60,6 +62,9 @@ export function StylePanel(props: {
             </button>
           ))}
         </div>
+        {project.template === "intro" ? (
+          <div className="field-hint warn">紹介動画風では使いません(9:16 は常に「上:見出し帯 / 中央:16:9 映像 / 下:字幕」のレイアウト)。</div>
+        ) : null}
         {vmode === "crop" ? (
           <div className="field-hint">
             切り抜く位置(focusX)はクリップを編集すると映像上の枠で調整できます
@@ -124,6 +129,7 @@ export function StylePanel(props: {
           onChange={(scale) => setWm({ scale })}
           disabled={wm.position === "none"}
         />
+        {project.template === "intro" ? <div className="field-hint warn">紹介動画風ではウォーターマークを出しません(見出し帯が担います)。</div> : null}
         {!project.game.logo ? <div className="field-hint">ロゴ未設定のときはタイトル文字を表示します(「設定」タブで登録)。</div> : null}
       </Section>
 
@@ -157,6 +163,35 @@ export function StylePanel(props: {
         </div>
       </Section>
 
+      <Section title="強調ワード 【】">
+        <div className="emph-colors" role="radiogroup" aria-label="強調の色">
+          {EMPH_PRESETS.map((c) => {
+            const active = style.emphasisColor.toLowerCase() === c.value.toLowerCase();
+            return (
+              <button
+                key={c.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                className={cx("emph-swatch", active && "is-active")}
+                onClick={() => setStyle({ emphasisColor: c.value })}
+                title={c.value}
+              >
+                <span className="emph-dot" style={{ background: c.value }} />
+                {c.label}
+              </button>
+            );
+          })}
+          <span className={cx("emph-swatch is-custom", isCustomEmph(style.emphasisColor) && "is-active")}>
+            <ColorField label="カスタム" value={style.emphasisColor} onChange={(emphasisColor) => setStyle({ emphasisColor })} />
+          </span>
+        </div>
+        <div className="emph-sample" lang="ja">
+          <EmphasisText text={"このゲーム【神すぎる】んだが！"} color={style.emphasisColor} />
+        </div>
+        <div className="field-hint">台本・字幕・紹介動画風の見出し/ポイント/情報カードで【】で囲んだ語の色です(少し大きく表示)。</div>
+      </Section>
+
       <Section title="カラー">
         <div className="field-row">
           <ColorField label="メイン" value={style.primaryColor} onChange={(primaryColor) => setStyle({ primaryColor })} />
@@ -166,6 +201,12 @@ export function StylePanel(props: {
     </div>
   );
 }
+
+const EMPH_PRESETS = [
+  { label: "黄", value: EMPHASIS_COLORS.yellow },
+  { label: "赤", value: EMPHASIS_COLORS.red },
+];
+const isCustomEmph = (v: string) => !EMPH_PRESETS.some((p) => p.value.toLowerCase() === v.toLowerCase());
 
 function ColorField(props: { label: string; value: string; onChange: (v: string) => void }) {
   const hex = /^#[0-9a-f]{6}$/i.test(props.value) ? props.value : "#ffffff";

@@ -9,6 +9,7 @@ import { type Format, type Fps, type Lang, type Project, type RenderJob } from "
 import type { AdVideoProps } from "@gas/compositions";
 import { notFound } from "./errors";
 import { BROWSER_EXECUTABLE, BUNDLE_WATCH_DIRS, COMPOSITIONS_ENTRY, LISTEN_PORT, projectDir } from "./paths";
+import { seFileExists } from "./se/library";
 import { readProject } from "./store";
 
 /** Must equal COMPOSITION_ID exported by @gas/compositions (kept literal to avoid a runtime import). */
@@ -175,12 +176,28 @@ function checkSources(project: Project) {
   }
 }
 
+/**
+ * v4: an SE slot whose library file is missing would make the headless render fail on a 404 audio fetch;
+ * such slots are removed from the render snapshot (logged) instead.
+ */
+function dropMissingSe(project: Project) {
+  const slots = project.audio.se.slots;
+  for (const slot of Object.keys(slots) as (keyof typeof slots)[]) {
+    const id = slots[slot];
+    if (id && !seFileExists(id)) {
+      console.warn(`[render] SE slot ${slot}: library file not found (${id}); rendering without it`);
+      delete slots[slot];
+    }
+  }
+}
+
 async function runJob(job: JobInternal): Promise<void> {
   const started = Date.now();
   // Snapshot the project when the job starts (picks up the latest saved edits).
   const loaded = await readProject(job.projectId);
-  const project: Project = job.fps ? { ...structuredClone(loaded), fps: job.fps } : loaded;
+  const project: Project = { ...structuredClone(loaded), ...(job.fps ? { fps: job.fps } : {}) };
   checkSources(project);
+  dropMissingSe(project);
 
   job.status = "bundling";
   job.progress = 0;

@@ -1,4 +1,5 @@
 import type { Caption } from "@gas/shared";
+import { parseEmText } from "./emphasisText";
 import { chunkJaText, isReadableJaChar, jaCharWeight } from "./jaCaptions";
 import type { TimedSegment } from "./whisper";
 
@@ -13,6 +14,7 @@ import type { TimedSegment } from "./whisper";
  * - Without script text: the transcript itself (whisper's punctuation helps) is chunked the same way.
  * - segments null/empty: proportional by spoken weight over the whole audio (fallback).
  * Each caption shows until the next one starts; the last one until the end of the audio. Times are line-relative.
+ * v4 (§6.13): script 【】 markers are not spoken: alignment uses the stripped script, caption texts keep the markers.
  */
 
 const round3 = (x: number) => Math.round(x * 1000) / 1000;
@@ -121,8 +123,10 @@ function flatten(segments: TimedSegment[], durationSec: number): { tc: { ch: str
  * `segments` = whisper result (null = whisper failed -> proportional / none).
  */
 export function buildRecordedJaCaptions(text: string, durationSec: number, segments: TimedSegment[] | null): Caption[] {
-  const script = text.trim();
-  if (!script) {
+  // v4: the script may contain 【】 — timing is aligned on the stripped characters (chunkJaText indexes the same
+  // [...stripEmphasis(text).trim()]), the chunk texts keep the markers
+  const chars = parseEmText(text).chars;
+  if (!chars.length) {
     if (!segments || !segments.length) return [];
     // transcript chars with times; whisper's spaces (often used instead of 。) and segment boundaries become breaks
     const tc: { ch: string; t: number }[] = [];
@@ -133,7 +137,7 @@ export function buildRecordedJaCaptions(text: string, durationSec: number, segme
         const t = s.charStarts[i] ?? 0;
         if (/\s/.test(ch)) {
           if (tc.length && tc[tc.length - 1]!.ch !== "、") tc.push({ ch: "、", t });
-        } else tc.push({ ch, t });
+        } else if (ch !== "【" && ch !== "】") tc.push({ ch, t }); // (markers would shift chunkJaText indexes)
       });
     }
     while (tc.length && tc[tc.length - 1]!.ch === "、") tc.pop();
@@ -141,7 +145,6 @@ export function buildRecordedJaCaptions(text: string, durationSec: number, segme
     const chunks = chunkJaText(transcript); // indexes [...transcript] (no outer whitespace)
     return toCaptions(chunks.map((c) => ({ text: c.text, start: tc[c.first]?.t ?? 0 })), durationSec);
   }
-  const chars = [...script];
   let times: number[];
   if (segments && segments.length) {
     const { tc, start, end } = flatten(segments, durationSec);
@@ -149,7 +152,7 @@ export function buildRecordedJaCaptions(text: string, durationSec: number, segme
   } else {
     times = proportionalTimes(chars, 0, durationSec);
   }
-  return toCaptions(chunkJaText(script).map((c) => ({ text: c.text, start: times[c.first]! })), durationSec);
+  return toCaptions(chunkJaText(text).map((c) => ({ text: c.text, start: times[c.first]! })), durationSec);
 }
 
 /* ------------------------------------------------------------------ */

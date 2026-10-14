@@ -6,6 +6,7 @@ import { useBgmAnalyze } from "../hooks/useBgmAnalysis";
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { basename, cx } from "../util";
 import { BeatPanel } from "./BeatPanel";
+import { SePanel } from "./SePanel";
 import { Icon, Section, Slider, Spinner, Switch } from "./ui";
 
 const AUDIO_ACCEPT = ".mp3,.wav,.m4a,.ogg,.aac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/ogg,audio/aac";
@@ -19,6 +20,7 @@ export function AudioPanel(props: {
   serverOk: boolean;
   /** output length (preview language), drawn on the beat strip */
   videoSec: number;
+  onOpenStructure?: () => void;
 }) {
   const { project, update } = props;
   const analyze = useBgmAnalyze(props.mutateOnServer);
@@ -176,6 +178,8 @@ export function AudioPanel(props: {
           hint="各クリップのゲーム音に掛ける倍率(ナレーション中のみ)"
         />
       </Section>
+
+      <SePanel project={project} update={update} serverOk={props.serverOk} onOpenStructure={props.onOpenStructure} />
     </div>
   );
 }

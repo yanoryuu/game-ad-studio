@@ -23,6 +23,7 @@ import { enqueueRender, getJob } from "./render";
 import { registerAnalysisRoutes } from "./routes/analysis";
 import { registerBgmRoutes } from "./routes/bgm";
 import { registerRenderRoutes } from "./routes/renders";
+import { initSeLibrary, registerSeRoutes } from "./routes/se";
 import { registerTtsRoutes } from "./routes/tts";
 import { recoverInterruptedJobs, registerSource } from "./sources";
 import {
@@ -168,19 +169,22 @@ app.get("/api/render/:jobId", (req, res) => {
 app.get("/files/:projectId/*path", serveProjectFile);
 
 /* ------------------------------------------------------------------ */
-/* Route modules (Phase 2: analysis / tts, Phase 3: bgm / renders)       */
+/* Route modules (Phase 2: analysis / tts, Phase 3: bgm / renders, 3.5: se) */
 /* ------------------------------------------------------------------ */
 
 registerAnalysisRoutes(app);
 registerTtsRoutes(app);
 registerBgmRoutes(app);
 registerRenderRoutes(app);
+registerSeRoutes(app);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
 
 await fsp.mkdir(PROJECTS_DIR, { recursive: true });
 await recoverInterruptedJobs();
+// v4: SE library placeholders + se.json (background; the library works without them)
+void initSeLibrary().catch((e) => console.warn(`[se] init failed: ${(e as Error).message}`));
 const server = app.listen(LISTEN_PORT, () => {
   console.log(`[server] listening on http://localhost:${LISTEN_PORT} (projects: ${PROJECTS_DIR})`);
 });

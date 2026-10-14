@@ -36,6 +36,14 @@ export type GasConfig = {
      */
     multilingualModel: string;
   };
+  /** v4: sound-effect library (ARCHITECTURE §6.12) */
+  se: {
+    /**
+     * Folder with the user's free SE files (any subfolders) + the generated "_placeholder/" sounds and the
+     * manifest "se.json". Never inside the repo. Env GAS_SE_DIR overrides it (test instances).
+     */
+    dir: string;
+  };
 };
 
 export const CONFIG_FILE = path.join(REPO_ROOT, "gas.config.json");
@@ -45,6 +53,7 @@ export const DEFAULT_CONFIG: GasConfig = {
   voicevox: { url: DEFAULT_VOICEVOX_URL },
   piper: { exePath: "D:\\Tools\\piper\\piper.exe", voicesDir: "D:\\Tools\\piper\\voices" },
   whisper: { dir: "D:\\Tools\\whisper", model: "base.en", multilingualModel: "small" },
+  se: { dir: "D:\\Tools\\se" },
 };
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -71,6 +80,7 @@ function loadConfig(): GasConfig {
       model: str(user.whisper?.model, DEFAULT_CONFIG.whisper.model),
       multilingualModel: str(user.whisper?.multilingualModel, DEFAULT_CONFIG.whisper.multilingualModel),
     },
+    se: { dir: path.resolve(str(process.env.GAS_SE_DIR, str(user.se?.dir, DEFAULT_CONFIG.se.dir))) },
   };
   const enginePath = user.voicevox?.enginePath;
   if (typeof enginePath === "string" && enginePath.trim()) cfg.voicevox.enginePath = enginePath.trim();

@@ -4,7 +4,7 @@ import type { Format, Lang, Project, VerticalMode } from "@gas/shared";
 import type { NarrationPlan } from "./narrationLayout";
 import { BODY_FONT } from "./fonts";
 import { isVertical, outline, unitFor } from "./theme";
-import { jaPhrases } from "./phrases";
+import { RichText, estimateRichEm, estimateWidestUnitEm } from "./RichText";
 
 /* ------------------------------------------------------------------ */
 /* Caption items on the output timeline                                 */
@@ -64,42 +64,17 @@ function activeAt(items: CaptionItem[], frame: number): CaptionItem | null {
   return best;
 }
 
-/** Rough width of `text` in em (CJK = 1, others ~0.56). */
-function estimateEm(text: string): number {
-  let em = 0;
-  for (const ch of text) em += (ch.codePointAt(0) ?? 0) > 0x2e80 ? 1 : 0.56;
-  return em;
-}
-
 /* ------------------------------------------------------------------ */
 /* Component                                                            */
 /* ------------------------------------------------------------------ */
-
-const CaptionText: React.FC<{ text: string; lang: Lang; fontSize: number }> = ({ text, lang, fontSize }) => {
-  const lines = text.split(/\r?\n/);
-  return (
-    <>
-      {lines.map((ln, i) => (
-        <span key={i}>
-          {i > 0 ? <br /> : null}
-          {lang === "ja"
-            ? jaPhrases(ln).map((ph, j) => (
-                <span key={j} style={{ display: "inline-block", whiteSpace: "pre" }}>
-                  {ph}
-                </span>
-              ))
-            : ln}
-        </span>
-      ))}
-    </>
-  );
-};
 
 /**
  * Ad-style captions: heavy weight, thick black outline + shadow, pop-in per chunk.
  * Position bottom/center, size m/l. In 9:16 "blur" mode "bottom" sits in the empty band below the
  * (letterboxed) gameplay instead of over it, so HUD elements stay readable; in 9:16 "crop" mode (full-bleed
  * footage) it sits above the bottom ~16% that short-video apps cover with their own UI.
+ * v4: 【emphasis】 runs are drawn in `emphasisColor`, EMPHASIS_SCALE x larger, brackets hidden (common/RichText);
+ * `scale` multiplies the base font size (templates set it via TemplateTimeline.captionLayout).
  */
 export const Captions: React.FC<{
   items: CaptionItem[];
@@ -110,7 +85,11 @@ export const Captions: React.FC<{
   color: string;
   position: "bottom" | "center";
   size: "m" | "l";
-}> = ({ items, lang, format, verticalMode = "blur", color, position, size }) => {
+  /** v4: color of 【emphasis】 runs (style.emphasisColor) */
+  emphasisColor?: string;
+  /** v4: base font size multiplier (default 1) */
+  scale?: number;
+}> = ({ items, lang, format, verticalMode = "blur", color, position, size, emphasisColor = "#FFE14D", scale = 1 }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const active = activeAt(items, frame);
@@ -122,11 +101,13 @@ export const Captions: React.FC<{
   const pop = spring({ frame: local, fps, config: { damping: 14, stiffness: 320, mass: 0.55 } });
   const opacity = interpolate(local, [0, 2], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
 
-  const base = (vertical ? (size === "l" ? 84 : 68) : size === "l" ? 74 : 58) * u;
+  const base = (vertical ? (size === "l" ? 84 : 68) : size === "l" ? 74 : 58) * u * scale;
   const maxWidth = width * (vertical ? 0.9 : 0.8);
   // shrink long captions so they stay within ~2 lines
-  const em = Math.max(...active.text.split(/\r?\n/).map(estimateEm), 1);
-  const fontSize = Math.max(base * 0.62, Math.min(base, (maxWidth * 2 * 0.9) / em));
+  const em = estimateRichEm(active.text);
+  // ...and so the widest unbreakable phrase/word still fits on one line (it would overflow the frame otherwise)
+  const unitFit = (maxWidth * 0.94) / estimateWidestUnitEm(active.text, lang);
+  const fontSize = Math.min(unitFit, Math.max(base * 0.62, Math.min(base, (maxWidth * 2 * 0.9) / em)));
   const stroke = Math.max(3, fontSize * 0.11);
 
   let box: React.CSSProperties;
@@ -165,7 +146,7 @@ export const Captions: React.FC<{
           textWrap: "balance",
         }}
       >
-        <CaptionText text={active.text} lang={lang} fontSize={fontSize} />
+        <RichText text={active.text} lang={lang} emphasisColor={emphasisColor} />
       </div>
     </AbsoluteFill>
   );

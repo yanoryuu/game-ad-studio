@@ -4,8 +4,8 @@ import {
   generateId,
   trailerClipOrder,
   type FeatureItem,
+  type Format,
   type Lang,
-  type LocalizedText,
   type Project,
   type TemplateId,
   type TrailerCard,
@@ -15,12 +15,15 @@ import { getSectionDurations } from "@gas/compositions";
 import { beatState, hasUsableBeats, useBgmAnalyze } from "../hooks/useBgmAnalysis";
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { basename, cx, formatSec, formatTime } from "../util";
-import { Banner, Icon, Section, Segmented, Spinner, Switch } from "./ui";
+import { IntroEditor, IntroFormatHint } from "./IntroEditor";
+import { LangAside, LocalizedInput, moveItem, withoutKey } from "./templateBits";
+import { Banner, Icon, Section, Spinner, Switch } from "./ui";
 
-export const TEMPLATE_INFO: { id: TemplateId; name: string; desc: string }[] = [
+export const TEMPLATE_INFO: { id: TemplateId; name: string; desc: string; tag?: string }[] = [
   { id: "hook-play-cta", name: "王道", desc: "フック → プレイ → エンドカード" },
   { id: "features", name: "魅力紹介", desc: "タイトル → 魅力ごとの見出し+クリップ → エンド" },
   { id: "trailer", name: "トレーラー風", desc: "短いカットとテロップを BGM の拍で交互に" },
+  { id: "intro", name: "紹介動画風", desc: "Shorts/TikTok 向け・縦型・ナレーション主導", tag: "9:16" },
 ];
 
 const MAX_FEATURES = 4;
@@ -37,6 +40,8 @@ export function TemplatePanel(props: {
   serverOk: boolean;
   onOpenAudio: () => void;
   onOpenClips: () => void;
+  format: Format;
+  setFormat: (f: Format) => void;
 }) {
   const { project, update } = props;
   return (
@@ -54,12 +59,18 @@ export function TemplatePanel(props: {
             >
               <TemplateGlyph id={t.id} />
               <span className="tpl-text">
-                <span className="tpl-name">{t.name}</span>
+                <span className="tpl-name">
+                  {t.name}
+                  {t.tag ? <span className="badge tpl-tag">{t.tag}</span> : null}
+                </span>
                 <span className="tpl-desc">{t.desc}</span>
               </span>
             </button>
           ))}
         </div>
+        {project.template === "intro" ? (
+          <IntroFormatHint project={project} update={update} format={props.format} setFormat={props.setFormat} />
+        ) : null}
         <div className="field-hint">切り替えてもクリップ・台本・各テンプレートの設定はそのまま残ります。</div>
       </Section>
 
@@ -67,6 +78,8 @@ export function TemplatePanel(props: {
         <FeaturesEditor {...props} />
       ) : project.template === "trailer" ? (
         <TrailerEditor {...props} />
+      ) : project.template === "intro" ? (
+        <IntroEditor {...props} />
       ) : (
         <Section title="王道の構成">
           <ol className="tpl-steps">
@@ -84,63 +97,6 @@ export function TemplatePanel(props: {
       )}
     </div>
   );
-}
-
-/* ------------------------------------------------------------------ */
-/* Shared bits                                                          */
-/* ------------------------------------------------------------------ */
-
-function LangAside(props: { lang: Lang; setLang: (l: Lang) => void }) {
-  return (
-    <Segmented<Lang>
-      size="sm"
-      value={props.lang}
-      onChange={props.setLang}
-      ariaLabel="言語"
-      options={[
-        { value: "ja", label: "日本語" },
-        { value: "en", label: "English" },
-      ]}
-    />
-  );
-}
-
-const otherLang = (l: Lang): Lang => (l === "ja" ? "en" : "ja");
-
-/** Text input for the current language + the other language's value as a dim reference. */
-function LocalizedInput(props: {
-  value: LocalizedText;
-  lang: Lang;
-  onChange: (v: LocalizedText) => void;
-  placeholder: LocalizedText;
-  ariaLabel: string;
-  big?: boolean;
-}) {
-  const o = otherLang(props.lang);
-  return (
-    <div className="loc-input">
-      <input
-        className={cx("input", !props.big && "input-sm")}
-        lang={props.lang}
-        value={props.value[props.lang]}
-        placeholder={props.placeholder[props.lang]}
-        aria-label={`${props.ariaLabel}(${props.lang === "ja" ? "日本語" : "English"})`}
-        onChange={(e) => props.onChange({ ...props.value, [props.lang]: e.target.value })}
-      />
-      <span className={cx("loc-other", !props.value[o] && "is-empty")} lang={o}>
-        <span className="lang-tag mono">{o.toUpperCase()}</span>
-        {props.value[o] || "未入力"}
-      </span>
-    </div>
-  );
-}
-
-function moveItem<T>(list: T[], i: number, dir: -1 | 1): T[] {
-  const j = i + dir;
-  if (j < 0 || j >= list.length) return list;
-  const next = list.slice();
-  [next[i], next[j]] = [next[j]!, next[i]!];
-  return next;
 }
 
 /* ------------------------------------------------------------------ */
@@ -273,11 +229,6 @@ function FeaturesEditor(props: {
       ) : null}
     </Section>
   );
-}
-
-function withoutKey<T extends object, K extends keyof T>(o: T, k: K): T {
-  const { [k]: _omit, ...rest } = o;
-  return rest as T;
 }
 
 /* ------------------------------------------------------------------ */
@@ -459,7 +410,9 @@ export function TemplateGlyph({ id }: { id: TemplateId }) {
       ? [[2, "a"], [6, "b"], [2, "c"]]
       : id === "features"
         ? [[1, "c"], [2, "b"], [2, "b"], [2, "b"], [2, "c"]]
-        : [[1, "b"], [1, "a"], [1, "b"], [1, "a"], [1, "b"], [2, "c"]];
+        : id === "intro"
+          ? [[1, "a"], [1, "b"], [1, "b"], [1, "b"], [1, "b"], [1, "b"], [2, "c"]]
+          : [[1, "b"], [1, "a"], [1, "b"], [1, "a"], [1, "b"], [2, "c"]];
   return (
     <span className="tpl-glyph" aria-hidden>
       {blocks.map(([w, k], i) => (

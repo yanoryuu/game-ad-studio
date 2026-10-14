@@ -1,6 +1,7 @@
 import type React from "react";
-import type { Format, Lang, Project, TemplateId } from "@gas/shared";
+import type { Format, Lang, Project, TemplateId, VerticalMode } from "@gas/shared";
 import type { NarrationPlan } from "../common/narrationLayout";
+import type { SeEvent } from "../common/SeTrack";
 
 /**
  * Template module contract (docs/ARCHITECTURE.md §5.4). Every template lives in templates/<name>/ and
@@ -44,6 +45,20 @@ export type TemplateTimeline = {
   sections: TimelineSectionInfo[];
   /** narration of the requested language placed on this timeline (common/narrationLayout.ts) */
   narration: NarrationPlan;
+  /**
+   * v4: sound effects to play (absolute frames, per slot). <AdVideo> resolves slot -> library file, applies
+   * audio.se.enabled / volume and plays them (common/SeTrack). Absent = none. Only templates listed in
+   * SE_TEMPLATES (@gas/shared) may emit SE (collectCredits relies on that).
+   */
+  seEvents?: SeEvent[];
+  /** v4: true -> <AdVideo> also plays the "captionPop" slot at the start of every caption chunk (§5.9) */
+  captionPopSe?: boolean;
+  /**
+   * v4: caption layout overrides applied by <AdVideo>: `scale` multiplies the caption font size (default 1);
+   * `verticalMode` replaces style.vertical.mode for caption placement in 9:16 (e.g. "blur" = the band below a
+   * centered 16:9 strip, whatever the project's mode).
+   */
+  captionLayout?: { scale?: number; verticalMode?: VerticalMode };
 };
 
 export type TemplateRenderProps<T extends TemplateTimeline = TemplateTimeline> = {

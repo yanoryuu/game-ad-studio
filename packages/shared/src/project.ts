@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { stripEmphasis } from "./emphasis";
 
 /* ------------------------------------------------------------------ */
 /* Primitive enums                                                     */
@@ -20,7 +21,7 @@ export const LANGS = langSchema.options;
 export const fpsSchema = z.union([z.literal(30), z.literal(60)]);
 export type Fps = z.infer<typeof fpsSchema>;
 
-export const templateIdSchema = z.enum(["hook-play-cta", "features", "trailer"]);
+export const templateIdSchema = z.enum(["hook-play-cta", "features", "trailer", "intro"]);
 export type TemplateId = z.infer<typeof templateIdSchema>;
 
 /** 15 / 30 sec, or null = "free" (natural length of the selected clips + narration). */
@@ -177,6 +178,7 @@ export const textsSchema = z.object({
 export type Texts = z.infer<typeof textsSchema>;
 
 export const captionSchema = z.object({
+  /** v4: may contain 【emphasis】 markers (rendered colored + larger, brackets hidden) */
   text: z.string(),
   /** seconds; on the OUTPUT timeline in project.captions, RELATIVE TO LINE START in scriptLine.captions */
   startSec: z.number().nonnegative(),
@@ -261,6 +263,7 @@ export const scriptLineSchema = z.object({
   id: z.string().regex(/^[A-Za-z0-9_-]+$/),
   lang: langSchema,
   section: scriptSectionIdSchema,
+  /** narration text; v4: may contain 【emphasis】 markers (not spoken: TTS uses stripEmphasis(text)) */
   text: z.string(),
   voice: voiceSchema,
   /**
@@ -301,7 +304,8 @@ export type ScriptLine = z.infer<typeof scriptLineSchema>;
  */
 export function hasNarrationInput(line: Pick<ScriptLine, "text" | "voice">): boolean {
   if (line.voice.engine === "recorded") return !!line.voice.sourcePath;
-  return line.text.trim() !== "";
+  // v4: emphasis markers 【】 are not spoken
+  return stripEmphasis(line.text).trim() !== "";
 }
 
 /* ------------------------------------------------------------------ */
@@ -333,12 +337,73 @@ export const bgmSchema = z.object({
 });
 export type Bgm = z.infer<typeof bgmSchema>;
 
+/**
+ * v4: sound-effect slots. A template emits SE events per slot (ARCHITECTURE §5.9); each slot plays the library
+ * file assigned to it (unset = silent).
+ */
+export const seSlotSchema = z.enum(["captionPop", "headline", "point", "info", "transition", "cta"]);
+export type SeSlot = z.infer<typeof seSlotSchema>;
+export const SE_SLOTS = seSlotSchema.options;
+
+/**
+ * v4: SE library file id = path RELATIVE TO THE SE LIBRARY DIR (config se.dir, default D:\Tools\se), forward
+ * slashes, e.g. "_placeholder/pop.wav", "otologic/Onmtp-Click01-1.mp3". No "..", no leading "/", no drive
+ * letter, no backslash, no dot-file segments. Served at GET /api/se/file/<id> (seFileUrl in compositions).
+ */
+export const seFileIdSchema = z
+  .string()
+  .min(1)
+  .max(400)
+  .refine(
+    (p) =>
+      !p.startsWith("/") &&
+      !p.includes("\\") &&
+      !p.includes("\0") &&
+      !/^[a-zA-Z]:/.test(p) &&
+      p.split("/").every((seg) => seg !== "" && !seg.startsWith(".")),
+    { message: "SE file id must be a library-relative path using forward slashes" },
+  );
+export type SeFileId = z.infer<typeof seFileIdSchema>;
+
+export const seSlotsSchema = z.object({
+  /** each caption chunk appearing (emitted centrally by <AdVideo> when the template opts in) */
+  captionPop: seFileIdSchema.optional(),
+  /** headline / title appearing */
+  headline: seFileIdSchema.optional(),
+  /** a recommended point (①②③) appearing */
+  point: seFileIdSchema.optional(),
+  /** the game info card appearing */
+  info: seFileIdSchema.optional(),
+  /** clip switch / scene transition */
+  transition: seFileIdSchema.optional(),
+  /** end card / call to action */
+  cta: seFileIdSchema.optional(),
+});
+export type SeSlots = z.infer<typeof seSlotsSchema>;
+
+export const seSettingsSchema = z.object({
+  /** master switch (false = no SE at all) */
+  enabled: z.boolean(),
+  /** master SE volume 0..1 (not ducked) */
+  volume: z.number().min(0).max(1),
+  slots: seSlotsSchema,
+  /**
+   * Snapshot of the library credits (se.json) of the files used in `slots`: file id -> credit text
+   * (e.g. "効果音:OtoLogic"). WEB-maintained (refreshed from GET /api/se whenever slots or the manifest change)
+   * so that collectCredits() / the end card work without the API (render). Absent / missing key = no credit.
+   */
+  credits: z.record(z.string(), z.string()).optional(),
+});
+export type SeSettings = z.infer<typeof seSettingsSchema>;
+
 export const audioSettingsSchema = z.object({
   /** narration (TTS) volume 0..1 */
   narrationVolume: z.number().min(0).max(1),
   /** multiplier 0..1 applied to each clip's gameVolume while narration plays (game-audio ducking) */
   gameVolumeUnderNarration: z.number().min(0).max(1),
   bgm: bgmSchema.optional(),
+  /** v4: sound effects (only templates that emit SE events play them; currently "intro") */
+  se: seSettingsSchema,
 });
 export type AudioSettings = z.infer<typeof audioSettingsSchema>;
 
@@ -388,6 +453,11 @@ export const styleSchema = z.object({
   captions: captionStyleSchema,
   /** v3: 9:16 layout (default { mode: "blur" }) */
   vertical: verticalStyleSchema,
+  /**
+   * v4: CSS color of 【emphasis】 runs in captions / headlines (default EMPHASIS_COLORS.yellow "#FFE14D";
+   * the UI also offers EMPHASIS_COLORS.red).
+   */
+  emphasisColor: z.string(),
 });
 export type Style = z.infer<typeof styleSchema>;
 
@@ -436,10 +506,70 @@ export const trailerDataSchema = z.object({
 });
 export type TrailerData = z.infer<typeof trailerDataSchema>;
 
+/**
+ * v4: reference to a script line PER LANGUAGE (script lines are per language, so a binding needs one id per
+ * language). Absent / unknown / not-playable id for the rendered lang = unbound (template default applies).
+ */
+export const langLineRefSchema = z.object({
+  ja: itemIdSchema.optional(),
+  en: itemIdSchema.optional(),
+});
+export type LangLineRef = z.infer<typeof langLineRefSchema>;
+
+/** One row of the intro info card, e.g. { label: { ja: "ジャンル", en: "Genre" }, value: { ja: "アクション", en: "Action" } }. */
+export const introInfoItemSchema = z.object({
+  /** "info_" + id */
+  id: itemIdSchema,
+  label: localizedTextSchema,
+  /** may contain 【emphasis】; "" = row hidden in that language */
+  value: localizedTextSchema,
+});
+export type IntroInfoItem = z.infer<typeof introInfoItemSchema>;
+
+/** One numbered recommended point (①②③…) of the intro template. */
+export const introPointSchema = z.object({
+  /** "point_" + id */
+  id: itemIdSchema,
+  /** may contain 【emphasis】; "" = point skipped in that language */
+  text: localizedTextSchema,
+  /** show this point's badge while that line plays (per language). Absent = auto (ARCHITECTURE §5.8) */
+  lineId: langLineRefSchema.optional(),
+});
+export type IntroPoint = z.infer<typeof introPointSchema>;
+
+/** v4: template "intro" (紹介動画風, vertical-first game introduction short). ARCHITECTURE §5.8. */
+export const introDataSchema = z.object({
+  /** persistent headline band; 【emphasis】 + "\n" line breaks; "" = no headline text in that language */
+  headline: localizedTextSchema,
+  /**
+   * small label above the headline, e.g. { ja: "今話題", en: "TRENDING" }. Displayed with stripEmphasis()
+   * (so "【今話題】" and "今話題" look the same: the whole label is drawn as a badge). Absent / "" = none.
+   */
+  kicker: localizedTextSchema.optional(),
+  info: z.object({
+    enabled: z.boolean(),
+    /** rows in display order (UI keeps 1..6) */
+    items: z.array(introInfoItemSchema).max(6),
+    /** start the card when this line starts (per language). Absent = the 2nd body line (§5.8) */
+    atLineId: langLineRefSchema.optional(),
+    /** how long the card stays, seconds */
+    durationSec: z.number().min(0.5).max(20),
+  }),
+  points: z.object({
+    /** display order = numbering ①②③…; max 5 */
+    items: z.array(introPointSchema).max(5),
+  }),
+  /** true (default): every body narration line switches to the next clip (§5.8); false: clips play back to back */
+  clipPerLine: z.boolean(),
+});
+export type IntroData = z.infer<typeof introDataSchema>;
+
 /** v3: per-template settings. Every template's data is kept regardless of the selected template. */
 export const templateDataSchema = z.object({
   features: featuresDataSchema,
   trailer: trailerDataSchema,
+  /** v4 */
+  intro: introDataSchema,
 });
 export type TemplateData = z.infer<typeof templateDataSchema>;
 
@@ -447,7 +577,7 @@ export type TemplateData = z.infer<typeof templateDataSchema>;
 /* Project                                                              */
 /* ------------------------------------------------------------------ */
 
-export const PROJECT_SCHEMA_VERSION = 3 as const;
+export const PROJECT_SCHEMA_VERSION = 4 as const;
 
 export const projectSchema = z.object({
   schemaVersion: z.literal(PROJECT_SCHEMA_VERSION),
@@ -475,7 +605,7 @@ export const projectSchema = z.object({
   /** v2: replaces the v1 top-level `bgm` */
   audio: audioSettingsSchema,
   style: styleSchema,
-  /** v3 */
+  /** v3 (v4: + intro) */
   templateData: templateDataSchema,
 });
 export type Project = z.infer<typeof projectSchema>;
@@ -517,9 +647,34 @@ export const DEFAULT_VOICES: Record<Lang, Voice> = {
   en: { engine: "piper", speaker: DEFAULT_PIPER_VOICE, speed: 1 },
 };
 
+/** v4: SE library dir subfolder with the generated placeholder sounds (server creates them when missing). */
+export const SE_PLACEHOLDER_DIR = "_placeholder";
+
+/** v4: placeholder file per slot (relative to the SE library), used by DEFAULT_SE. */
+export const SE_PLACEHOLDER_FILES: Record<SeSlot, SeFileId> = {
+  captionPop: "_placeholder/pop.wav",
+  headline: "_placeholder/headline.wav",
+  point: "_placeholder/point.wav",
+  info: "_placeholder/info.wav",
+  transition: "_placeholder/transition.wav",
+  cta: "_placeholder/cta.wav",
+};
+
+/** v4: default SE settings: on, volume 0.7, every slot mapped to its placeholder. */
+export const DEFAULT_SE: SeSettings = {
+  enabled: true,
+  volume: 0.7,
+  slots: { ...SE_PLACEHOLDER_FILES },
+};
+
+/** v4: templates that emit SE events (others never play SE, and collectCredits skips SE credits for them). */
+export const SE_TEMPLATES: readonly TemplateId[] = ["intro"];
+export const templateUsesSe = (id: TemplateId): boolean => SE_TEMPLATES.includes(id);
+
 export const DEFAULT_AUDIO: AudioSettings = {
   narrationVolume: 1,
   gameVolumeUnderNarration: 0.35,
+  se: structuredClone(DEFAULT_SE),
 };
 
 /** Defaults for a newly added BGM (web sets `path` after the upload). */
@@ -537,6 +692,7 @@ export const DEFAULT_STYLE: Style = {
   watermark: { position: "top-right", scale: 1 },
   captions: { enabled: true, position: "bottom", size: "m" },
   vertical: { mode: "blur" },
+  emphasisColor: "#FFE14D",
 };
 
 /** Defaults of templateData (deterministic ids, so repeated in-memory migrations of the same file agree). */
@@ -557,7 +713,52 @@ export function createDefaultTemplateData(): TemplateData {
       beatSync: true,
       logoReveal: true,
     },
+    intro: createDefaultIntroData(),
   };
+}
+
+/** v4: defaults of templateData.intro (deterministic ids info_1..4 / point_1..3). */
+export function createDefaultIntroData(): IntroData {
+  return {
+    headline: { ja: "このゲーム\n【神すぎる】んだが！", en: "This game is\n【INSANELY GOOD】" },
+    kicker: { ja: "今話題", en: "TRENDING" },
+    info: {
+      enabled: true,
+      items: [
+        { id: "info_1", label: { ja: "ジャンル", en: "Genre" }, value: { ja: "アクション", en: "Action" } },
+        { id: "info_2", label: { ja: "価格", en: "Price" }, value: { ja: "1,500円", en: "$9.99" } },
+        { id: "info_3", label: { ja: "対応機種", en: "Platforms" }, value: { ja: "PC(Steam)", en: "PC (Steam)" } },
+        { id: "info_4", label: { ja: "発売日", en: "Release" }, value: { ja: "2026年冬", en: "Winter 2026" } },
+      ],
+      durationSec: 4,
+    },
+    points: {
+      items: [
+        { id: "point_1", text: { ja: "【爽快】なアクション", en: "【Thrilling】 action" } },
+        { id: "point_2", text: { ja: "毎回変わる【ステージ】", en: "A 【new stage】 every run" } },
+        { id: "point_3", text: { ja: "やり込み要素が【無限】", en: "【Endless】 replay value" } },
+      ],
+    },
+    clipPerLine: true,
+  };
+}
+
+/**
+ * v4, template "intro": clip order for the per-line clip switching = hook-slot clips (array order) then
+ * main-slot clips (array order) — the same list as trailerClipOrder. Body line k uses clip k % n.
+ */
+export function introClipOrder(project: Pick<Project, "clips">): Clip[] {
+  return trailerClipOrder(project);
+}
+
+/**
+ * v4, template "intro": the BODY lines of `lang` in playback order = hook lines (array order) then main lines
+ * (array order). Every line is listed (playable or not) — the web uses this for the info / point line pickers;
+ * the template only places playable ones. cta lines play on the end card and are not body lines.
+ */
+export function introBodyLines(project: Pick<Project, "script">, lang: Lang): ScriptLine[] {
+  const ls = project.script.filter((l) => l.lang === lang);
+  return [...ls.filter((l) => l.section === "hook"), ...ls.filter((l) => l.section === "main")];
 }
 
 /**
@@ -613,16 +814,19 @@ export function createScriptLine(
  * A line's stored `credit` (set on synthesis) wins; for VOICEVOX lines without one (not synthesized yet) the
  * credit is looked up by speaker in `voices` (e.g. GET /api/tts/voices?engine=voicevox), falling back to
  * DEFAULT_VOICEVOX_CREDIT for the default speaker. Lines with empty text, Piper and recorded lines need none.
+ * v4: + SE credits (collectSeCredits; pass `seFiles` = GET /api/se `files` for fresh values, otherwise the
+ * project's audio.se.credits snapshot is used — that is what the end card shows in renders).
  */
 export function collectCredits(
   project: Project,
   lang?: Lang,
   voices?: readonly { speaker: string; credit?: string }[],
+  seFiles?: readonly { id: string; credit?: string }[],
 ): string[] {
   const out = new Set<string>();
   for (const l of project.script) {
     if (lang && l.lang !== lang) continue;
-    if (!l.text.trim()) continue;
+    if (!stripEmphasis(l.text).trim()) continue;
     if (l.credit) {
       out.add(l.credit);
       continue;
@@ -631,6 +835,29 @@ export function collectCredits(
     const looked = voices?.find((v) => v.speaker === l.voice.speaker)?.credit;
     if (looked) out.add(looked);
     else if (l.voice.speaker === DEFAULT_VOICEVOX_SPEAKER) out.add(DEFAULT_VOICEVOX_CREDIT);
+  }
+  for (const c of collectSeCredits(project, seFiles)) out.add(c);
+  return [...out];
+}
+
+/**
+ * v4: credits of the SE library files the project actually plays: only for templates that emit SE
+ * (templateUsesSe), audio.se.enabled and volume > 0, over the files assigned to slots (deduplicated, slot order).
+ * Credit per file = `seFiles` (GET /api/se `files`, fresh) when given, else the audio.se.credits snapshot.
+ * Language-independent. Included by collectCredits().
+ */
+export function collectSeCredits(
+  project: Pick<Project, "template" | "audio">,
+  seFiles?: readonly { id: string; credit?: string }[],
+): string[] {
+  const se = project.audio.se;
+  if (!templateUsesSe(project.template) || !se.enabled || se.volume <= 0) return [];
+  const out = new Set<string>();
+  for (const slot of SE_SLOTS) {
+    const id = se.slots[slot];
+    if (!id) continue;
+    const credit = seFiles ? seFiles.find((f) => f.id === id)?.credit : se.credits?.[id];
+    if (credit?.trim()) out.add(credit.trim());
   }
   return [...out];
 }

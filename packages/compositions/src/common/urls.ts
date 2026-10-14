@@ -37,3 +37,12 @@ export function sourceUrl(baseUrl: string, project: Project, sourceId: string, u
     `/api/projects/${encodeURIComponent(project.id)}/sources/${encodeURIComponent(sourceId)}/original`,
   );
 }
+
+/**
+ * v4: URL of an SE library file (id = library-relative path, e.g. "_placeholder/pop.wav"):
+ * seFileUrl("", "_placeholder/pop.wav") -> "/api/se/file/_placeholder/pop.wav" (preview, via the Vite /api proxy)
+ * seFileUrl("http://localhost:3101", ...) -> "http://localhost:3101/api/se/file/_placeholder/pop.wav" (render)
+ */
+export function seFileUrl(baseUrl: string, fileId: string): string {
+  return joinUrl(baseUrl, `/api/se/file/${encodeRelPath(fileId)}`);
+}

@@ -4,7 +4,10 @@ import {
   createScriptLine,
   DEFAULT_VOICES,
   DEFAULT_VOICEVOX_SPEAKER,
+  hasEmphasis,
   hasNarrationInput,
+  stripEmphasis,
+  templateUsesSe,
   type FeatureItem,
   type TemplateId,
   type Caption,
@@ -21,7 +24,9 @@ import { api, errorMessage, featureErrorMessage } from "../api";
 import { mainTargetSec } from "../autoArrange";
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { reloadVoices, useAudioPlayer, useRequiredCredits, useTtsStatus, useTtsVoices, type TtsStatusState } from "../hooks/useTts";
+import { introPlan, type LineAttachment } from "../introPlan";
 import { basename, clamp, cx, formatSec, round2 } from "../util";
+import { EmphasisField, EmphasisText } from "./Emphasis";
 import { Banner, Icon, Section, Segmented, Spinner } from "./ui";
 
 const ENGINE: Record<Lang, TtsEngine> = { ja: "voicevox", en: "piper" };
@@ -33,7 +38,7 @@ const SECTIONS: { id: ScriptSectionId; label: string; hint: string; offsetLabel:
 ];
 
 /** Per-template wording of the script sections (ARCHITECTURE §5.5 / §5.6). */
-const SECTION_TEXT: Partial<Record<TemplateId, Partial<Record<ScriptSectionId, { label: string; hint: string }>>>> = {
+const SECTION_TEXT: Partial<Record<TemplateId, Partial<Record<ScriptSectionId, { label: string; hint: string; offsetLabel?: string }>>>> = {
   features: {
     hook: { label: "タイトル", hint: "冒頭のタイトルで流れる一言。タイトル開始から offset 秒後に再生。" },
     main: { label: "魅力", hint: "行ごとに魅力を選ぶとその魅力の頭から順に再生。「全体」の行は最初の魅力から続けて再生。" },
@@ -41,6 +46,16 @@ const SECTION_TEXT: Partial<Record<TemplateId, Partial<Record<ScriptSectionId, {
   trailer: {
     hook: { label: "冒頭", hint: "動画の頭(0 秒)から offset 秒後に再生。" },
     main: { label: "本編", hint: "冒頭の行の後から順に連続で再生(ロゴ演出の前まで)。" },
+  },
+  // v4 intro (§5.8): hook and main lines play back to back as one body
+  intro: {
+    hook: {
+      label: "フック",
+      hint: "動画の頭で流れるつかみの行。フック → 本文の順に区切りなく連続で再生します。offset は前の行との間(秒)。",
+      offsetLabel: "間",
+    },
+    main: { label: "本文", hint: "フックの行に続けて順に再生。行ごとに映像が切り替わり、ポイント・情報カードを行に紐付けられます。" },
+    cta: { label: "CTA", hint: "エンドカードで流れる呼びかけ。エンドカード開始から offset 秒後。" },
   },
 };
 const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥"];
@@ -94,6 +109,10 @@ export function ScriptEditor(props: {
   const langLines = project.script.filter((l) => l.lang === lang);
   const pending = langLines.filter(needsSynth);
   const credits = useRequiredCredits(project, lang);
+  const isIntro = project.template === "intro";
+  const iplan = useMemo(() => (isIntro ? introPlan(project, lang) : null), [isIntro, project, lang]);
+  const emphColor = project.style.emphasisColor;
+  const anyEmph = langLines.some((l) => hasEmphasis(l.text));
   const allBusy = busy.has("*");
 
   /* ---------- edits ---------- */
@@ -156,6 +175,8 @@ export function ScriptEditor(props: {
       const prevVoice = [...same, ...p.script.filter((l) => l.lang === lang)].reverse().find((l) => l.voice.engine === engine)?.voice;
       const line = createScriptLine(lang, section);
       if (prevVoice && prevVoice.engine === engine) line.voice = { ...prevVoice };
+      // intro: fast narration (×1.2〜1.3) by default (§5.8)
+      else if (p.template === "intro") line.voice = { ...line.voice, speed: 1.25 };
       const lastIdx = same.length ? p.script.indexOf(same[same.length - 1]!) : -1;
       const script = p.script.slice();
       if (lastIdx >= 0) script.splice(lastIdx + 1, 0, line);
@@ -209,7 +230,8 @@ export function ScriptEditor(props: {
       if (l.voice.sourcePath) player.play(`pv:${l.id}`, assetUrl("", project.id, l.voice.sourcePath));
       return;
     }
-    const text = l.text.trim().slice(0, 500);
+    // 【】 are markup, never read aloud (§6.13)
+    const text = stripEmphasis(l.text).trim().slice(0, 500);
     if (!text) return;
     setPreviewing(l.id);
     setLineMsg((m) => ({ ...m, [l.id]: "" }));
@@ -269,6 +291,13 @@ export function ScriptEditor(props: {
             </button>
           </div>
         ) : null}
+        <div className={cx("emph-hint", anyEmph && "is-used")}>
+          <span className="emph-hint-key mono">【】</span>
+          <span>
+            で囲んだ語は <EmphasisText text="【強調】" color={emphColor} />
+            (色・大きめ)で字幕に出ます。括弧は表示されず、<b>読み上げもしません</b>。選択して <kbd>Ctrl</kbd>+<kbd>B</kbd> または入力欄の【】ボタン。
+          </span>
+        </div>
         {reqError ? <Banner tone="error">{reqError}</Banner> : null}
         {overflowCount > 0 ? (
           <Banner tone="warn">
@@ -334,6 +363,8 @@ export function ScriptEditor(props: {
                   recordingName={l.voice.sourcePath ? recName[l.voice.sourcePath] ?? basename(l.voice.sourcePath) : null}
                   features={sec.id === "main" ? featureItems : []}
                   onFeature={(id) => setFeature(l, id)}
+                  emphasisColor={emphColor}
+                  attachments={iplan?.byLine.get(l.id)}
                 />
               ))}
             </ol>
@@ -352,10 +383,13 @@ export function ScriptEditor(props: {
                 {c}
               </span>
             ))}
-            <div className="field-hint">VOICEVOX の音声を使った動画には、動画内または説明欄に上記の表記が必要です。</div>
+            <div className="field-hint">
+              VOICEVOX の音声{templateUsesSe(project.template) ? "や、クレジットが必要な効果音(OtoLogic など)" : ""}
+              を使った動画には、動画内または説明欄に上記の表記が必要です。
+            </div>
           </div>
         ) : (
-          <div className="field-hint">クレジット表記が必要な音声は使われていません。</div>
+          <div className="field-hint">クレジット表記が必要な音声・効果音は使われていません。</div>
         )}
       </Section>
     </div>
@@ -459,6 +493,10 @@ function LineCard(props: {
   /** features template, main section: the items a line can be bound to ([] = no selector) */
   features: FeatureItem[];
   onFeature: (id: string) => void;
+  /** style.emphasisColor (【】 rendering) */
+  emphasisColor: string;
+  /** intro: info card / points shown while this line plays */
+  attachments?: LineAttachment[];
 }) {
   const { line: l, engine, voices } = props;
   const [showCaps, setShowCaps] = useState(false);
@@ -467,7 +505,7 @@ function LineCard(props: {
   const entry = voices.entry;
   const list: TtsVoice[] = entry.kind === "ok" ? entry.voices.filter((v) => v.engine === engine) : [];
   const known = list.some((v) => v.speaker === l.voice.speaker);
-  const hasText = l.text.trim() !== "";
+  const hasText = stripEmphasis(l.text).trim() !== "";
   const hasInput = hasNarrationInput(l);
   const previewOn = props.playing === `pv:${l.id}`;
   const playOn = props.playing === `au:${l.id}`;
@@ -567,13 +605,25 @@ function LineCard(props: {
             ))}
           </select>
         ) : null}
+        {props.attachments?.map((a) => (
+          <span
+            key={a.label}
+            className={cx("line-attach", `is-${a.kind}`, a.auto && "is-auto")}
+            title={a.auto ? "自動で割り当て(構成タブで変更できます)" : "構成タブで紐付け"}
+          >
+            {a.label}
+            {a.auto ? <em>自動</em> : null}
+          </span>
+        ))}
       </div>
 
-      <textarea
-        className="input textarea line-text"
+      <EmphasisField
+        multiline
         rows={2}
+        className="line-text"
         lang={l.lang}
         value={l.text}
+        ariaLabel="ナレーションの台詞"
         placeholder={
           recorded
             ? l.lang === "ja"
@@ -583,8 +633,13 @@ function LineCard(props: {
               ? "ナレーションの台詞"
               : "Narration line"
         }
-        onChange={(e) => props.onText(e.target.value)}
+        onChange={props.onText}
       />
+      {hasEmphasis(l.text) ? (
+        <div className="emph-preview" title="字幕での見え方(【】は表示も読み上げもされません)">
+          <EmphasisText text={l.text} color={props.emphasisColor} lang={l.lang} />
+        </div>
+      ) : null}
       {transcript ? (
         <div className="transcript" lang={l.lang}>
           <span className="transcript-tag">書き起こし</span>
@@ -689,7 +744,7 @@ function LineCard(props: {
             {!showCaps ? (
               <span className="caps-inline">
                 {l.captions.map((c, i) => (
-                  <span key={i}>{c.text}</span>
+                  <EmphasisText key={i} text={c.text} color={props.emphasisColor} />
                 ))}
               </span>
             ) : null}
@@ -725,16 +780,17 @@ function LineCard(props: {
                       props.onCaptions(l.captions.map((x, j) => (j === i ? { ...x, endSec: round2(Math.max(0, v)) } : x)));
                     }}
                   />
-                  <input
-                    className="input input-sm cap-text"
+                  <EmphasisField
+                    size="sm"
+                    className="cap-text"
                     value={c.text}
                     lang={l.lang}
-                    aria-label="字幕テキスト"
-                    onChange={(e) => props.onCaptions(l.captions.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))}
+                    ariaLabel="字幕テキスト"
+                    onChange={(v) => props.onCaptions(l.captions.map((x, j) => (j === i ? { ...x, text: v } : x)))}
                   />
                 </li>
               ))}
-              <li className="field-hint">字幕の文字・タイミングは行の開始からの秒。再生成すると上書きされます。</li>
+              <li className="field-hint">字幕の文字・タイミングは行の開始からの秒。【】で強調できます。再生成すると上書きされます。</li>
             </ol>
           ) : null}
         </div>

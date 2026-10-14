@@ -6,6 +6,7 @@ import { getTemplate } from "./templates";
 import { Captions, buildCaptionItems } from "./common/Captions";
 import { Bgm } from "./common/Bgm";
 import { Narration } from "./common/NarrationTrack";
+import { SeTrack, buildSeSchedule } from "./common/SeTrack";
 import { makeDuckEnvelope } from "./common/audioMix";
 import { DuckContext } from "./common/mixContext";
 import { BODY_FONT } from "./common/fonts";
@@ -27,7 +28,8 @@ export type AdVideoProps = {
 /**
  * The single composition. Dispatches to the template module of project.template (templates/index.ts),
  * which renders the visuals from its timeline; this component adds what every template shares:
- * black background + body font, the ducking envelope, captions, narration audio and BGM.
+ * black background + body font, the ducking envelope, captions, narration audio and BGM, and (v4) the sound
+ * effects of tl.seEvents (+ caption pops when tl.captionPopSe).
  */
 export const AdVideo: React.FC<AdVideoProps> = ({ project, format, lang, assetBaseUrl, useProxy }) => {
   const { fps } = useVideoConfig();
@@ -38,6 +40,10 @@ export const AdVideo: React.FC<AdVideoProps> = ({ project, format, lang, assetBa
   const captionItems = useMemo(
     () => (project.style.captions.enabled ? buildCaptionItems(project, lang, tl.narration, fps) : []),
     [project, lang, tl, fps],
+  );
+  const se = useMemo(
+    () => buildSeSchedule(project, tl.seEvents, captionItems, tl.captionPopSe === true, tl.totalFrames, fps),
+    [project, tl, captionItems, fps],
   );
   const cs = project.style.captions;
   const Visuals = template.Component;
@@ -51,14 +57,17 @@ export const AdVideo: React.FC<AdVideoProps> = ({ project, format, lang, assetBa
           items={captionItems}
           lang={lang}
           format={format}
-          verticalMode={project.style.vertical.mode}
+          verticalMode={tl.captionLayout?.verticalMode ?? project.style.vertical.mode}
           color={project.style.primaryColor}
           position={cs.position}
           size={cs.size}
+          emphasisColor={project.style.emphasisColor}
+          scale={tl.captionLayout?.scale ?? 1}
         />
       ) : null}
       <Narration project={project} plan={tl.narration} assetBaseUrl={assetBaseUrl} />
       {project.audio.bgm ? <Bgm project={project} assetBaseUrl={assetBaseUrl} /> : null}
+      {se.length > 0 ? <SeTrack project={project} events={se} assetBaseUrl={assetBaseUrl} /> : null}
     </AbsoluteFill>
     </DuckContext.Provider>
   );

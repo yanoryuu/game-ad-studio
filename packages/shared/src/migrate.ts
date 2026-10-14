@@ -1,8 +1,10 @@
 import {
   DEFAULT_AUDIO,
+  DEFAULT_SE,
   DEFAULT_STYLE,
   DEFAULT_VOICES,
   PROJECT_SCHEMA_VERSION,
+  createDefaultIntroData,
   createDefaultTemplateData,
   langSchema,
   projectSchema,
@@ -32,6 +34,13 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
  *  - style.vertical: added { mode: "blur" }
  *  - everything else is additive + optional (clip.featureId, line.featureId/warning, voice.sourcePath,
  *    bgm.beats/bpm/analysisStatus/analysisError) -> nothing to convert
+ *
+ * v3 -> v4 (Phase 3.5, template "intro"):
+ *  - templateData.intro: added with createDefaultIntroData()
+ *  - audio.se: added DEFAULT_SE (enabled, volume 0.7, every slot -> _placeholder/*.wav). Only SE-emitting
+ *    templates (SE_TEMPLATES = ["intro"]) play them, so existing templates sound exactly as before.
+ *  - style.emphasisColor: added "#FFE14D"
+ *  - 【】 in existing texts become emphasis markup (no conversion; such brackets were rare before)
  */
 export function migrateProject(raw: unknown): Project {
   if (!isObj(raw)) throw new Error("project.json is not an object");
@@ -42,7 +51,22 @@ export function migrateProject(raw: unknown): Project {
   let p: Obj = structuredClone(raw);
   if (version < 2) p = v1ToV2(p);
   if (version < 3) p = v2ToV3(p);
+  if (version < 4) p = v3ToV4(p);
   return projectSchema.parse(p);
+}
+
+function v3ToV4(p: Obj): Obj {
+  const out: Obj = { ...p, schemaVersion: 4 };
+  const td: Obj = isObj(p.templateData) ? { ...p.templateData } : {};
+  if (!isObj(td.intro)) td.intro = createDefaultIntroData();
+  out.templateData = td;
+  const audio: Obj = isObj(p.audio) ? { ...p.audio } : { ...DEFAULT_AUDIO };
+  audio.se = structuredClone(isObj(audio.se) ? audio.se : DEFAULT_SE);
+  out.audio = audio;
+  const style: Obj = isObj(p.style) ? { ...p.style } : { ...DEFAULT_STYLE };
+  if (typeof style.emphasisColor !== "string") style.emphasisColor = DEFAULT_STYLE.emphasisColor;
+  out.style = style;
+  return out;
 }
 
 function v2ToV3(p: Obj): Obj {
