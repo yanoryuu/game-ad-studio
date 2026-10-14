@@ -3,9 +3,12 @@ import { DEFAULT_BGM, type AudioSettings, type Bgm, type Project } from "@gas/sh
 import { assetUrl } from "@gas/compositions";
 import { api, errorMessage } from "../api";
 import { useBgmAnalyze } from "../hooks/useBgmAnalysis";
+import { AUDIO_EXTS, useFileDrop } from "../hooks/useFileDrop";
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { basename, cx } from "../util";
+import { bgmFilesOf, useBgmLibrary, useBgmLibrarySync } from "../hooks/useBgmLibrary";
 import { BeatPanel } from "./BeatPanel";
+import { BgmLibrary, needsCredit } from "./BgmLibrary";
 import { SePanel } from "./SePanel";
 import { Icon, Section, Slider, Spinner, Switch } from "./ui";
 
@@ -30,7 +33,10 @@ export function AudioPanel(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [drag, setDrag] = useState(false);
+
+  const bgmLib = useBgmLibrary(true);
+  useBgmLibrarySync(project, update, bgmFilesOf(bgmLib.state));
+  const libRef = bgm?.library;
 
   const setAudio = (patch: Partial<AudioSettings>) => update((p) => ({ ...p, audio: { ...p.audio, ...patch } }));
   const setBgm = (patch: Partial<Bgm>) =>
@@ -66,6 +72,13 @@ export function AudioPanel(props: {
     }
   };
 
+  const drop = useFileDrop({
+    accept: AUDIO_EXTS,
+    disabled: busy,
+    onFiles: (files) => void upload(files[0]),
+    onReject: () => setError("mp3 / wav / m4a / ogg / aac のファイルを選んでください"),
+  });
+
   const removeBgm = () =>
     update((p) => {
       const { bgm: _omit, ...rest } = p.audio;
@@ -76,17 +89,9 @@ export function AudioPanel(props: {
     <div className="audio-panel">
       <Section title="BGM">
         <div
-          className={cx("bgm-drop", bgm && "has-file", drag && "is-drag")}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDrag(true);
-          }}
-          onDragLeave={() => setDrag(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDrag(false);
-            void upload(e.dataTransfer.files[0]);
-          }}
+          className={cx("bgm-drop", bgm && "has-file", drop.over && "is-drag is-drop-over")}
+          data-drop-label={bgm ? "ここにドロップして差し替え" : "ここにドロップ"}
+          {...drop.dropProps}
         >
           {busy ? (
             <div className="bgm-row">
@@ -98,8 +103,8 @@ export function AudioPanel(props: {
                 <span className="bgm-icon">
                   <Icon.Music />
                 </span>
-                <span className="bgm-name" title={bgm.path}>
-                  {fileName ?? basename(bgm.path)}
+                <span className="bgm-name" title={libRef ? `ライブラリ: ${libRef.id}` : bgm.path}>
+                  {libRef ? basename(libRef.id) : (fileName ?? basename(bgm.path))}
                 </span>
                 <button className="btn btn-sm ml-auto" onClick={() => inputRef.current?.click()}>
                   差し替え
@@ -108,6 +113,20 @@ export function AudioPanel(props: {
                   <Icon.Trash />
                 </button>
               </div>
+              {libRef ? (
+                <div className="bgm-current-credit">
+                  {libRef.source ? <span className="bgm-badge">{libRef.source}</span> : null}
+                  {libRef.credit ? (
+                    <span>
+                      クレジット: <b>{libRef.credit}</b>(エンドカードと概要欄の表記に入ります)
+                    </span>
+                  ) : needsCredit(libRef) ? (
+                    <span className="warn">⚠ {libRef.source} の曲はクレジットが必要です。ライブラリの ✎ から設定してください</span>
+                  ) : (
+                    <span className="muted">クレジット表記なし</span>
+                  )}
+                </div>
+              ) : null}
               <audio className="bgm-audio" controls preload="none" src={assetUrl("", project.id, bgm.path)} />
               <BeatPanel
                 project={project}
@@ -155,6 +174,7 @@ export function AudioPanel(props: {
             <Switch checked={bgm.loop} onChange={(loop) => setBgm({ loop })} label="ループして動画全体を埋める" />
           </>
         ) : null}
+        <BgmLibrary project={project} mutateOnServer={props.mutateOnServer} serverOk={props.serverOk} />
       </Section>
 
       <Section title="ミックス">

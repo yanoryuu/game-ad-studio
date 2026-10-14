@@ -6,6 +6,8 @@ import {
   DEFAULT_VOICEVOX_SPEAKER,
   hasEmphasis,
   hasNarrationInput,
+  isShortTemplate,
+  SHORT_TEMPLATE_IDS,
   stripEmphasis,
   templateUsesSe,
   type FeatureItem,
@@ -22,6 +24,7 @@ import {
 import { assetUrl, buildNarrationPlan } from "@gas/compositions";
 import { api, errorMessage, featureErrorMessage } from "../api";
 import { mainTargetSec } from "../autoArrange";
+import { AUDIO_EXTS, useFileDrop } from "../hooks/useFileDrop";
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { reloadVoices, useAudioPlayer, useRequiredCredits, useTtsStatus, useTtsVoices, type TtsStatusState } from "../hooks/useTts";
 import { introPlan, type LineAttachment } from "../introPlan";
@@ -57,6 +60,32 @@ const SECTION_TEXT: Partial<Record<TemplateId, Partial<Record<ScriptSectionId, {
     main: { label: "本文", hint: "フックの行に続けて順に再生。行ごとに映像が切り替わり、ポイント・情報カードを行に紐付けられます。" },
     cta: { label: "CTA", hint: "エンドカードで流れる呼びかけ。エンドカード開始から offset 秒後。" },
   },
+  // v5 short-form templates (§5.10): same narration rules as intro
+  ...(Object.fromEntries(
+    SHORT_TEMPLATE_IDS.map((id) => [
+      id,
+      {
+        hook: {
+          label: "フック",
+          hint: "動画の頭で流れるつかみの行。フック → 本文の順に区切りなく連続で再生します。offset は前の行との間(秒)。",
+          offsetLabel: "間",
+        },
+        main: {
+          label: "本文",
+          hint:
+            "フックの行に続けて順に再生。入りきらない行は本文の終わりで切れます。" +
+            (id === "list" ? "本文の行数 = 項目数のとき、各行の開始で次の項目に切り替わります。" : ""),
+        },
+        cta: {
+          label: "CTA",
+          hint:
+            id === "loop"
+              ? "最後に重ねる小さな CTA の開始から offset 秒後に流れる呼びかけ(無限ループはエンドカード無し)。"
+              : "エンドカードで流れる呼びかけ。エンドカード開始から offset 秒後。",
+        },
+      },
+    ]),
+  ) as Partial<Record<TemplateId, Partial<Record<ScriptSectionId, { label: string; hint: string; offsetLabel?: string }>>>>),
 };
 const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥"];
 const AUDIO_ACCEPT = ".mp3,.wav,.m4a,.ogg,.aac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/ogg,audio/aac";
@@ -175,8 +204,8 @@ export function ScriptEditor(props: {
       const prevVoice = [...same, ...p.script.filter((l) => l.lang === lang)].reverse().find((l) => l.voice.engine === engine)?.voice;
       const line = createScriptLine(lang, section);
       if (prevVoice && prevVoice.engine === engine) line.voice = { ...prevVoice };
-      // intro: fast narration (×1.2〜1.3) by default (§5.8)
-      else if (p.template === "intro") line.voice = { ...line.voice, speed: 1.25 };
+      // intro / short-form templates: fast narration (×1.2〜1.3) by default (§5.8 / §5.10)
+      else if (p.template === "intro" || isShortTemplate(p.template)) line.voice = { ...line.voice, speed: 1.25 };
       const lastIdx = same.length ? p.script.indexOf(same[same.length - 1]!) : -1;
       const script = p.script.slice();
       if (lastIdx >= 0) script.splice(lastIdx + 1, 0, line);
@@ -501,6 +530,13 @@ function LineCard(props: {
   const { line: l, engine, voices } = props;
   const [showCaps, setShowCaps] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // recorded lines: drop an audio file onto the recording field (reject -> onUpload shows the message)
+  const recDrop = useFileDrop({
+    accept: AUDIO_EXTS,
+    disabled: props.uploading || !props.serverOk,
+    onFiles: (files) => props.onUpload(files[0]),
+    onReject: (files) => props.onUpload(files[0]),
+  });
   const recorded = l.voice.engine === "recorded";
   const entry = voices.entry;
   const list: TtsVoice[] = entry.kind === "ok" ? entry.voices.filter((v) => v.engine === engine) : [];
@@ -649,7 +685,11 @@ function LineCard(props: {
 
       <div className={cx("line-controls", recorded && "is-recorded")}>
         {recorded ? (
-          <div className="lc lc-rec">
+          <div
+            className={cx("lc lc-rec drop-zone", recDrop.over && "is-drop-over")}
+            data-drop-label="録音をドロップ"
+            {...recDrop.dropProps}
+          >
             <span className="field-label">録音ファイル</span>
             <div className="rec-row">
               <button

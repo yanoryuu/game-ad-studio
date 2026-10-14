@@ -13,6 +13,8 @@ import type {
   RenderRequest,
   RenderStartResponse,
   SeListResponse,
+  BgmListResponse,
+  BgmManifestUpdateRequest,
   SeManifestUpdateRequest,
   TtsEngine,
   TtsPreviewRequest,
@@ -20,6 +22,7 @@ import type {
   TtsSynthesizeRequest,
   TtsVoice,
   UploadAssetResponse,
+  UploadSourceResponse,
 } from "@gas/shared";
 
 export class ApiError extends Error {
@@ -74,6 +77,47 @@ async function request<T>(method: string, url: string, body?: unknown, init?: Re
   return data as T;
 }
 
+/** Upload progress: bytes sent so far / total bytes. */
+export type UploadProgress = (loaded: number, total: number) => void;
+
+/**
+ * multipart POST via XMLHttpRequest (fetch has no upload progress). Same error mapping as request().
+ * `signal` aborts the upload (rejects with an AbortError).
+ */
+function uploadWithProgress<T>(url: string, file: File, onProgress?: UploadProgress, signal?: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.upload.onprogress = (e) => onProgress?.(e.loaded, e.lengthComputable ? e.total : file.size);
+    xhr.onerror = () => reject(new ApiError(0, "サーバーに接続できません"));
+    xhr.onabort = () => reject(new DOMException("Upload aborted", "AbortError"));
+    xhr.onload = () => {
+      const text = xhr.responseText;
+      let data: unknown = undefined;
+      try {
+        data = text ? JSON.parse(text) : undefined;
+      } catch {
+        data = undefined;
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data !== undefined) return resolve(data as T);
+      if (!text && xhr.status >= 500) return reject(new ApiError(0, "サーバーに接続できません"));
+      const msg =
+        data && typeof data === "object" && "error" in data && typeof (data as { error: unknown }).error === "string"
+          ? (data as { error: string }).error
+          : xhr.status === 413
+            ? "ファイルが大きすぎます"
+            : xhr.status >= 200 && xhr.status < 300
+              ? "不正なレスポンス"
+              : `HTTP ${xhr.status}`;
+      reject(new ApiError(xhr.status, msg));
+    };
+    signal?.addEventListener("abort", () => xhr.abort(), { once: true });
+    const fd = new FormData();
+    fd.append("file", file);
+    xhr.send(fd);
+  });
+}
+
 export const api = {
   health: (signal?: AbortSignal) => request<HealthResponse>("GET", "/api/health", undefined, { signal }),
   listProjects: () => request<ProjectSummary[]>("GET", "/api/projects"),
@@ -82,6 +126,9 @@ export const api = {
   saveProject: (p: Project) => request<Project>("PUT", `/api/projects/${encodeURIComponent(p.id)}`, p),
   addSource: (id: string, body: AddSourceRequest) =>
     request<Project>("POST", `/api/projects/${encodeURIComponent(id)}/sources`, body),
+  /** Upload a video / image as a source (multipart, one file) -> 201 Project (new source "pending"). */
+  uploadSource: (id: string, file: File, onProgress?: UploadProgress, signal?: AbortSignal) =>
+    uploadWithProgress<UploadSourceResponse>(`/api/projects/${encodeURIComponent(id)}/sources/upload`, file, onProgress, signal),
   uploadAsset: (id: string, file: File) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -104,6 +151,26 @@ export const api = {
   rescanSe: () => request<SeListResponse>("POST", "/api/se/rescan"),
   /** Merges credits into se.json ("" removes one) and returns the list. */
   updateSeManifest: (body: SeManifestUpdateRequest) => request<SeListResponse>("PUT", "/api/se/manifest", body),
+  /** Copies an audio file into the SE library root (name kept, " (2)" on collisions) and returns the list. */
+  uploadSe: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<SeListResponse>("POST", "/api/se/upload", fd);
+  },
+
+  /* ---- BGM library (§6.14) ---- */
+  listBgm: () => request<BgmListResponse>("GET", "/api/bgm"),
+  rescanBgm: () => request<BgmListResponse>("POST", "/api/bgm/rescan"),
+  /** Merges per id / field into bgm.json ("" / [] removes) and returns the list. */
+  updateBgmManifest: (body: BgmManifestUpdateRequest) => request<BgmListResponse>("PUT", "/api/bgm/manifest", body),
+  uploadBgm: (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<BgmListResponse>("POST", "/api/bgm/upload", fd);
+  },
+  /** Copies a library track into the project's assets, sets audio.bgm (+ library) and starts beat analysis. */
+  bgmFromLibrary: (id: string, fileId: string) =>
+    request<Project>("POST", `/api/projects/${encodeURIComponent(id)}/bgm/from-library`, { id: fileId }),
 
   /* ---- Phase 2 ---- */
   /** 202 Project (analysisStatus "running"); 409 when busy / proxy not ready. */

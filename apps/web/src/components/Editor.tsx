@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { generateId, hasNarrationInput, templateUsesSe, trailerClipOrder, type Clip, type Format, type Lang, type Project, type Source } from "@gas/shared";
+import { generateId, hasNarrationInput, isShortTemplate, templateUsesSe, trailerClipOrder, type Clip, type Format, type Lang, type Project, type Source } from "@gas/shared";
 import { calcAdMetadata } from "@gas/compositions";
 import { api, ApiError } from "../api";
-import { insertClip } from "../autoArrange";
+import { DEFAULT_GAME_VOLUME, insertClip } from "../autoArrange";
+import { droppedKind, useWindowFileDrop } from "../hooks/useFileDrop";
 import { useHealth } from "../hooks/useHealth";
 import { useProject, type SaveState } from "../hooks/useProject";
 import { useSeCreditsSync } from "../hooks/useSeLibrary";
+import { useSourceUploads } from "../hooks/useSourceUploads";
 import { introWarnings } from "../introPlan";
+import { shortWarnings } from "../shortForm";
 import { navigate } from "../hooks/useHashRoute";
-import { basename, cx } from "../util";
+import { sourceName, cx } from "../util";
 import { AudioPanel } from "./AudioPanel";
 import { CandidatesPanel } from "./CandidatesPanel";
 import { ClipList } from "./ClipList";
@@ -99,6 +102,42 @@ export function Editor({ projectId }: { projectId: string }) {
     setActiveCandId(null);
     setHoverCandId(null);
   }, [selectedSourceId]);
+
+  // Source uploads (sources panel + whole-editor drop): select the new source when it lands.
+  const uploads = useSourceUploads(mutateOnServer, (id) => {
+    setSelectedSourceId(id);
+    setEditingClipId(null);
+  });
+
+  // Whole-editor drop: files dropped outside a drop zone -> videos / images become sources.
+  const [dropNote, setDropNote] = useState<string | null>(null);
+  const windowDrag = useWindowFileDrop((files) => {
+    const media = files.filter((f) => ["video", "image"].includes(droppedKind(f.name)));
+    const audio = files.filter((f) => droppedKind(f.name) === "audio");
+    const other = files.filter((f) => droppedKind(f.name) === "other");
+    if (media.length) {
+      uploads.add(media);
+      setLeftTab("media");
+    }
+    const notes: string[] = [];
+    if (audio.length) notes.push("音声は「音声」タブの BGM 欄・台本の録音行・効果音ライブラリにドロップしてください。");
+    if (other.length) notes.push(`対応していない形式です(${other.map((f) => f.name).join(", ")})。素材は動画・画像のみです。`);
+    setDropNote(notes.length ? notes.join(" ") : null);
+  }, health.status !== "down");
+  useEffect(() => {
+    if (!dropNote) return;
+    const t = window.setTimeout(() => setDropNote(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [dropNote]);
+
+  /** Image source -> main-slot clip [0, 3 s] at the end of the main section. */
+  const addImageClip = useCallback(
+    (sourceId: string) => {
+      const clip: Clip = { id: generateId("clip", 8), sourceId, inSec: 0, outSec: 3, slot: "main", gameVolume: DEFAULT_GAME_VOLUME };
+      update((p) => ({ ...p, clips: insertClip(p.clips, clip) }));
+    },
+    [update],
+  );
 
   const updateClip = useCallback(
     (clipId: string, patch: Partial<ClipDraft>) =>
@@ -268,6 +307,8 @@ export function Editor({ projectId }: { projectId: string }) {
                     setEditingClipId(null);
                   }}
                   onAdd={addSource}
+                  uploads={uploads}
+                  onAddImageClip={addImageClip}
                   onRemove={(id) => {
                     if (editingClip?.sourceId === id) setEditingClipId(null);
                     removeSource(id);
@@ -318,7 +359,7 @@ export function Editor({ projectId }: { projectId: string }) {
                     >
                       {project.sources.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {basename(s.originalPath)}
+                          {sourceName(s)}
                           {s.analysisStatus === "done"
                             ? `(候補 ${project.candidates.filter((c) => c.sourceId === s.id).length})`
                             : s.analysisStatus === "running"
@@ -375,6 +416,7 @@ export function Editor({ projectId }: { projectId: string }) {
                     window.setTimeout(() => document.querySelector(".clips-section")?.scrollIntoView({ block: "start" }), 50);
                   }}
                   serverOk={serverOk}
+                  onAddImageClip={addImageClip}
                 />
               </>
             ) : (
@@ -438,6 +480,25 @@ export function Editor({ projectId }: { projectId: string }) {
           </div>
         </aside>
       </div>
+
+      {windowDrag.dragging && !windowDrag.inZone ? (
+        <div className="editor-drop-overlay" aria-hidden>
+          <div className="editor-drop-card">
+            <Icon.Upload size={22} />
+            <b>ドロップして素材に追加</b>
+            <span>動画・画像(複数可)。ロゴ・BGM・録音・効果音はそれぞれの欄にドロップ</span>
+          </div>
+        </div>
+      ) : null}
+      {dropNote ? (
+        <div className="drop-note" role="status">
+          <Icon.Alert size={14} />
+          <span>{dropNote}</span>
+          <button className="btn btn-icon btn-ghost" onClick={() => setDropNote(null)} aria-label="閉じる">
+            <Icon.Close size={12} />
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -454,7 +515,7 @@ function scriptBadge(project: Project, lang: Lang) {
 /** Index shown in the clip marker ("クリップ N"): position in the slot, or the cut number for the trailer. */
 function editingIndexOf(project: Project, clip: Clip | null): number {
   if (!clip) return -1;
-  if (project.template === "trailer" || project.template === "intro") return trailerClipOrder(project).indexOf(clip);
+  if (project.template === "trailer" || project.template === "intro" || isShortTemplate(project.template)) return trailerClipOrder(project).indexOf(clip);
   return project.clips.filter((c) => c.slot === clip.slot).indexOf(clip);
 }
 
@@ -466,7 +527,7 @@ function audioBadge(project: Project) {
 
 /** Warning badge on the 構成 tab: trailer beat sync without beats / intro lines that cannot be attached. */
 function structureBadge(project: Project, lang: Lang) {
-  const intro = introWarnings(project, lang);
+  const intro = isShortTemplate(project.template) ? shortWarnings(project, project.template) : introWarnings(project, lang);
   if (intro.length) {
     return (
       <span className="tab-badge-warn" title={intro.join("\n")}>
@@ -492,7 +553,7 @@ function SourceNotReady({ source }: { source: Source }) {
         <div className="src-wait-title">{pending ? "プレビュー用プロキシを生成中…" : "プロキシの生成に失敗しました"}</div>
         <div className={cx("field-hint", !pending && "mono")}>
           {pending
-            ? `${basename(source.originalPath)}(${Math.round(source.durationSec)} 秒)。完了すると自動で表示されます。`
+            ? `${sourceName(source)}(${Math.round(source.durationSec)} 秒)。完了すると自動で表示されます。`
             : source.proxyError ?? "不明なエラー"}
         </div>
       </div>

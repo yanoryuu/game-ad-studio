@@ -133,6 +133,8 @@ projects/<projectId>/
   proxies/         <sourceId>.mp4      720p 30fps H.264 + AAC
   thumbs/          <sourceId>.jpg / [v2] <candidateId>.jpg(= cand_<nanoid>.jpg)
   assets/          アップロード画像・音声 <nanoid>.<ext>
+  media/           [素材アップロード] アップロードした素材 <nanoid><ext> / 画像ソースの画像 <sourceId>-image<ext>(旧形式の画像ソースは静止画動画 <sourceId>.mp4 も)
+                   (ソースをプロジェクトから外すと該当ファイルも削除。§6.1)
   tts/             [v2] <lineId>.wav   ナレーション音声
   renders/         書き出し結果 .mp4
 ```
@@ -140,14 +142,14 @@ projects/<projectId>/
 - ID: プロジェクト `p_<nanoid(10)>`、ソース `src_<nanoid(8)>`、クリップ `clip_<nanoid(8)>`、
   [v2] 候補 `cand_<nanoid(8)>`、台本行 `line_<8 文字>`(web が `createScriptLine()` / `generateId("line", 8)` で生成)。英数と `_` `-` のみ。
 - **アセット参照の規約**: project.json に入るパスはプロジェクトディレクトリからの相対パス、区切りは `/`。
-  例外: `sources[].originalPath` だけは元動画の絶対パス。
+  例外: `sources[].originalPath` だけは元動画の絶対パス(アップロード素材・画像ソースは `projects/<id>/media/` 内の絶対パス)。
 - [v2] **マイグレーション**: server は project.json を読むたびに `migrateProject(raw)`(`@gas/shared`)を通す。
   v1 ファイルはメモリ上で v2 に変換され、次の保存時に v2 で書かれる(読むだけではファイルは変わらない)。
   [v3] 同様に v1 / v2 → v3。[v4] 同様に v1 / v2 / v3 → v4。
 - [v3] 特徴(魅力)項目 `feat_<id>`、トレーラーのテロップ `card_<id>`(web が `generateId("feat", 8)` / `generateId("card", 8)`。既定値は `feat_1..3`, `card_1..2`)。
 - [v4] intro の情報カード行 `info_<id>`、おすすめポイント `point_<id>`(web が `generateId("info", 8)` / `generateId("point", 8)`。既定値は `info_1..4`, `point_1..3`)。
 
-## 4. データモデル(`@gas/shared`, schemaVersion 4)
+## 4. データモデル(`@gas/shared`, schemaVersion 5)
 
 正は `packages/shared/src/project.ts`。要点:
 
@@ -158,6 +160,11 @@ Project = {
   game: { title, logo?, keyArt?, releaseText: { ja, en } /*[v2]*/, steamUrl?, platforms: string[] },
   sources: {
     id, originalPath, proxyPath, thumbPath, durationSec, fps, width, height, hasAudio,
+    kind?: "video" | "image", name?,   // 画像ソース / 表示名(アップロード・画像の元ファイル名)。無し = "video"・originalPath の basename(§6.1)
+    imagePath?: AssetRef,              // [画像ソース] 画像そのもの "media/<id>-image<ext>"。あり = ネイティブ画像(isStillImageSource)。
+                                       //   このとき originalPath = その絶対パス、proxyPath = "proxies/<id>.webp"(長辺 ≤ 1280)、
+                                       //   durationSec = IMAGE_MAX_CLIP_SEC(60 = 1 クリップの最大長)、width/height = 画像の実寸、fps 30、hasAudio false。
+                                       //   kind "image" で imagePath 無し = 旧形式(8 秒の静止画 mp4 に変換済み)→ 動画として扱う
     proxyStatus: "pending" | "ready" | "error", proxyError?,                 // [v2]
     analysisStatus: "none" | "running" | "done" | "error", analysisError?,  // [v2]
   }[],
@@ -169,6 +176,9 @@ Project = {
     id, sourceId, inSec, outSec, slot: "hook" | "main", gameVolume: 0..1,
     focusX?: 0..1,          // [v3] 9:16 crop の切り出し中心(既定 0.5)。blur モードではぼかし背景の位置
     featureId?: string,     // [v3] features テンプレート: main クリップが属する魅力項目の id(§5.5)
+    imageMotion?: "none" | "zoomIn" | "zoomOut" | "panLeft" | "panRight",
+                            // [画像ソース] 画像クリップの動き(無し = "zoomIn")。ネイティブ画像ソースのクリップだけで有効。
+                            //   画像クリップ = 画像を (outSec − inSec) 秒表示(web は inSec 0・outSec = 長さで保存)。gameVolume は無視(音なし)
   }[],
   texts: { ja: { hook, cta }, en: { hook, cta } },
   script: ScriptLine[],                                                      // [v2]
@@ -306,6 +316,10 @@ ScriptLine = {                                 // [v2]
 - `style.emphasisColor` が無ければ "#FFE14D"。
 - 既存テキスト中の【】はそのまま強調マークアップとして扱われる(変換なし)。v1/v2 は順に通る。
 
+### 4.3b v4 → v5 マイグレーション [v5]
+- `templateData.shorts`: 追加。無いテンプレートの項目は `createDefaultShortFormData(id)` で埋める(§5.10)。他は不変。
+- `templateIdSchema` に 10 種(`SHORT_TEMPLATE_IDS`)を追加。`SE_TEMPLATES` = intro + 10 種。
+
 ### 4.4 強調ワード(【】)[v4]
 - 対象: 台本 `line.text`、字幕(`line.captions[].text`, `project.captions[lang][].text`)、intro の headline / points / info の value。
   (`texts.hook` / `texts.cta` やテロップ・魅力見出しは今回は対象外 = そのまま表示。テンプレートが `RichText` を使えば対応できる)
@@ -395,6 +409,8 @@ hook-play-cta では `featureId` は無視(普通の main 行)。
 - [v4] 字幕の【強調】は §4.4 のとおり色 `style.emphasisColor`・1.15 倍で描き、括弧は出さない(全テンプレート共通、【】が無ければ見た目は v3 と同一)。
 - [v4] テンプレートは `TemplateTimeline.captionLayout` で字幕の配置を上書きできる: `scale`(フォントサイズ倍率、既定 1)、
   `verticalMode`(9:16 の配置計算に使うモード。intro は "blur" = 中央の 16:9 帯の下の帯に置く。project の vertical.mode より優先)。
+- [v5] `captionLayout` の追加項目(省略時は従来と完全に同じ): `variant`("outline" 既定 | "plain-dark" = 黒文字・黒縁/影/ポップ無し(白地では見えない白い縁だけ付く)、【強調】は emphasisColor のまま・明るい色なら細い黒縁)、
+  `fontFamily`(字幕フォント。読み込みはテンプレート側)、`box916` / `box169`(`{top?, bottom?, left?, right?}` = 各形式のフレーム px。指定時は position/verticalMode より優先。top+bottom = 帯の中央、top のみ = 上揃え、bottom のみ = 下揃え)。trivia が使用。
 
 ### 5.3 音声ミックスとダッキング [v2]
 - **ナレーション**: `<Audio>` 音量 = `audio.narrationVolume`。
@@ -511,7 +527,8 @@ function getTemplate(id: TemplateId): TemplateModule;
   logo、end。
 
 ### 5.7 9:16 の作り方 [v3]
-- `style.vertical.mode`(9:16 のときだけ効く。16:9 は常に cover):
+- `style.vertical.mode`(9:16 のときだけ効く。16:9 は常に cover。**例外: ネイティブ画像ソース**は cover で画像の 12% より多く切れる縦横比
+  (横長ロゴ・縦長スクショ等)なら 16:9 でもぼかし背景 + contain(`IMAGE_COVER_MAX_CROP`)。9:16 の blur / crop は動画と同じ規則):
   - `"blur"`(既定): 16:9 の映像を横幅いっぱいに中央配置、上下の帯を同じ映像のぼかしで埋める(Phase 2 と同じ)。
   - `"crop"`: 映像を全面 cover で切り出す。横方向の中心 = `clip.focusX`(既定 0.5、0 = 左端、1 = 右端。CSS `object-position: focusX*100% 50%`)。
 - 実装は `common/ClipTrack.tsx`(テンプレートは ClipTrack を使えば自動で対応)。字幕は §5.2。
@@ -592,6 +609,51 @@ gain は担当の裁量(例: transition 0.7)。同じフレーム・同じスロ
 - レンダー時、ライブラリに存在しないファイルのスロットは server(render.ts の `dropMissingSe`)がスナップショットから外す(404 でレンダーが落ちないように)。
   プレビューでは web が `GET /api/se` の一覧に無いファイルを割り当て済みスロットに警告表示する。
 
+### 5.10 ショート用テンプレート 10 種 [v5](`templates/shorts/**`)
+
+参考調査(howtomarketagame / Segwise / Meta・TikTok 公式 / GameBusiness.jp ほか)から、再生数の多いショート・広告の型を 10 種にした。
+データは全テンプレート共通の形 `templateData.shorts[id]: ShortFormData`(title / sub / note / items / number / flag)。
+**各フィールドの意味・クリップスロットの意味は `@gas/shared` の `SHORT_TEMPLATE_META` が正**(web はそれで UI を組む)。使わないフィールドは無視する。
+
+**共通規則(全 10 種)**
+- 置き場所: `templates/shorts/common/**`(共有部品・共通タイムライン)と `templates/shorts/<id>/**`(各テンプレート)。
+  既存の `common/**` は読み取り専用で再利用(ClipTrack / EndCard / RichText / Captions / SeTrack / narrationLayout / clips / theme / fonts)。
+- ナレーション: intro(§5.8)と同じ。本文行 = hook 行 → main 行を `t = 0` から連続再生、cta 行はエンドカード開始 + offsetSec。
+  固定長で溢れた行は本文末で切る / 落とす(`overflowLineIds`)。ナレーション無しでも成立すること(字幕無し・テキスト演出だけで見られる)。
+- クリップ列: `trailerClipOrder(project)`(hook スロット → main スロット)。テンプレートによっては hook スロット = 前半(失敗・ビフォー・コメント中など)、
+  main スロット = 後半として**意味を持たせる**(META の slots)。クリップ 0 本でも描画が壊れない(Backdrop / NoFootage)。
+- 長さ: 自由 = 本文 max(テンプレートの最短, ナレーション need + 0.4 秒, 演出に必要な最短(カード・項目数など))。
+  ナレーションが無ければクリップの自然長の合計(テンプレートが決めた上限・下限で丸めてよい)。
+  固定 15/30 = 合計ちょうど durationSec(エンドカードを除いた本文に演出を収める。演出の各ブロックは比例で縮める)。
+- エンドカード: `common/EndCard`(3 秒、cta 行で伸びる。§5.4)。**loop は例外**(エンドカードを置かず、最後の ~2.5 秒に小さな CTA を重ね、
+  flag なら最後 ~0.5 秒で冒頭の映像にクロスフェードして継ぎ目なくループ)。
+- 1 フレーム目から読める(Shorts/TikTok のサムネイル)。黒やフェードインで始めない。主要な文字は 0〜1.5 秒以内に出す。
+- 字幕: 共通 `<Captions>`。`captionLayout` で位置を調整(9:16 は映像帯の下、scale 1.15〜1.3 推奨)。テンプレートの大きな文字と字幕が重ならないこと。
+- 9:16 のセーフゾーン(TikTok/Reels の UI): 上 ~200px・下 ~420px・右 ~120px(y > 840)に重要な文字を置かない。
+  `style.vertical.mode` は各テンプレートの判断で使ってよい(既定は intro と同じ「上帯・中央 16:9・下字幕」系でもよい)。
+- 16:9 でも破綻しないこと(映像全面 + 文字は上部/左右パネル、字幕は共通の下部)。
+- 効果音: 全 10 種が `SE_TEMPLATES` に入る。使えるスロットは既存 6 種のみ: headline(タイトル・大文字の登場)/ transition(カット・場面転換)/
+  point(項目・番号・ゲージ到達など)/ info(吹き出し・カード)/ cta(エンドカード・CTA)/ captionPop(`captionPopSe: true` で字幕ごと)。
+- テキストは全て `RichText`(【強調】= `style.emphasisColor`、`\n` 改行)。空文字の要素は出さない。言語は `lang`。
+- `sections` は意味のある区間に分ける(kind は既存の hook / main / card / end を流用、label は日本語)。
+- 見た目は「広告っぽすぎない、画面録画の生っぽさ + 太い縁取り文字」が基本(調査: 作り込みすぎは Z 世代に嫌われる)。
+  ただしテンプレートごとに **一目で違う型と分かる** 演出にする。
+
+**各テンプレートの構成(秒数は 15 秒前後の目安)**
+| id | 構成 |
+|---|---|
+| `question` 質問フック | 0 秒: title(質問)を大きくスラム表示 → 0.8 秒ほどで上部の帯に縮んで本文の間ずっと残る。本文: クリップをテンポよく切替。本文の最後 ~3 秒: flag かつ items があれば投票ボタン風(A/B…、バーが伸びる演出)、sub(コメント誘導)を吹き出しで。→ エンド |
+| `challenge` 挑戦状 | 0 秒: 「CHALLENGE」バッジ + title(挑戦文)、hook クリップ(難所)。number > 0 なら画面上にカウントダウンタイマー(本文の長さに合わせて number→0)。録画風の赤い REC 枠。flag: 最後のクリップの終わり ~1 秒を暗転し sub(結果は…)を出す → note(エンド前の一言)→ エンド |
+| `fail-win` 失敗→逆転 | hook スロット(失敗): 赤フラッシュ・揺れ・グリッチ + title(失敗テキスト)。→ sub(でも…)の全画面カード ~1 秒 → main スロット(逆転): flag なら冒頭 ~1.2 秒を 0.5 倍速、その後通常速度 + note(逆転テキスト)を大きく → エンド |
+| `payoff` 溜め→爆発 | 上部に title(煽り)を常時。最後のクリップ以外 = 溜め(flag ならゲージが徐々に溜まる、カットごとに少し加速)。最後のクリップ = ペイオフ: 白フラッシュ・ズームパンチ・揺れ + note を大きく → エンド |
+| `before-after` ビフォーアフター | title(見出し)を上部に。hook スロット = ビフォー(彩度を落とす + sub ラベル「1年前」)。ハードカット(フェード無し、白フラッシュ 2 フレーム程度)→ main = アフター(鮮やか + note ラベル「今」)。flag: 本文の最後 ~2.5 秒は 9:16 上下 / 16:9 左右に並べて比較 → エンド |
+| `devlog` 開発日記 | 0 秒: 巨大な「DAY {number}」(number 0 なら出さない)+ title(今日のテーマ)。その後は左上に小さな「DAY n」バッジ + sub(タグ)を常時、生っぽい録画風。本文の最後 ~2 秒に note(フォロー誘導)→ エンド |
+| `dev-pitch` 開発者ピッチ | The Matriarch 型: 9:16 = 上帯に title(一人称ピッチ)常時、中央にプレイ、**下部に CTA バー常時**(texts.cta + sub の開発者名)。テンポ重視(クリップ短め)。16:9 = 上部バナー + 右下 CTA。→ エンド |
+| `loop` 無限ループ | 文字最小限(title があれば小さく上部)。クリップのみでテンポよく。エンドカード無し(上記)。最後 ~2.5 秒に小さな CTA(texts.cta)を重ね、cta 行があればそこで再生。 |
+| `list` 〇〇選 | 0 秒: title(見出し)を大きく(hook クリップ背景)。各項目: 番号カード(「1」「2」…、flag なら「第 N 位」→ 第 1 位の順)~0.6 秒 → main クリップ(項目順に 1 本ずつ、足りなければ繰り返し)+ 上部に番号付き項目テキスト。ナレーションがあれば main 行 k を項目 k に合わせる(行数 = 項目数のとき行の開始で項目を切り替え)→ エンド |
+| `trivia` 雑学ストーリー | 参考: YouTube Shorts「本家なのに本家だと証明しなきゃいけないゲーム」(ゲーム雑学の勇者、162 万再生)。**白背景**の 9:16。y≈270–480 に 2 行見出し(1 行目 = 赤い箱に白い極太文字、2 行目 = 白地に黒の極太文字、字間広め)を全編固定。y≈488–1432 に映像窓(横幅いっぱい・約 8:7、映像は cover で中央切り出し、focusX を使う)。その下 y≈1500 に**黒文字・縁取りなし**の字幕(1 チャンクずつ、ナレーションに同期)。映像は台本の行ごと(長い行は ~1.2 秒ごと)にテンポよく切替、静止画も混ぜる前提。sub があれば映像窓の下端付近に小さく。flag(既定 on)= エンドカード無しで最後まで同じ画面(cta 行は無視しない: 本文の最後に続けて再生)、off = 通常のエンドカード。16:9: 白背景に左右 2 カラム(左に見出し+字幕、右に映像)など破綻しない形。 |
+| `comment` コメント返信 | 0 秒: TikTok の返信ステッカー風の吹き出し(sub の投稿者名 + title のコメント)が hook クリップの上にポップ(SE info)。hook スロットが終わると吹き出しは左上に小さく残る。main スロット = 回答、開始時に note(回答の一言)を大きく → エンド |
+
 ## 6. Server HTTP API(`@gas/server`, port 3101)
 
 - JSON API。エラーは常に `{ error: string }` + ステータス(400 / 404 / 409 / 500 / 501 / 503)。
@@ -604,7 +666,8 @@ gain は担当の裁量(例: transition 0.7)。同じフレーム・同じスロ
 | POST | `/api/projects` | `{ name }` | 201 `Project` |
 | GET | `/api/projects/:id` | — | `Project`(v3 に migrate 済み) |
 | PUT | `/api/projects/:id` | `Project` | `Project`(§6.2 のマージ後) |
-| POST | `/api/projects/:id/sources` | `{ path }` | **[v2] 201 `Project`(即時。新ソースは末尾、proxyStatus "pending")** |
+| POST | `/api/projects/:id/sources` | `{ path }` | **[v2] 201 `Project`(即時。新ソースは末尾、proxyStatus "pending")**。動画に加えて画像(`IMAGE_EXTS`)も可(§6.1) |
+| POST | `/api/projects/:id/sources/upload` | multipart `"file"`(1 ファイル、≤ 20 GB、`VIDEO_EXTS` + `IMAGE_EXTS`) | **201 `Project`**(`media/<nanoid><ext>` に保存して POST /sources と同じ登録。失敗時はファイル削除)|
 | GET | `/api/projects/:id/sources/:sourceId/original` | — | 元動画(Range 対応) |
 | POST | `/api/projects/:id/assets` | multipart `"file"` | `{ path: "assets/<nanoid>.<ext>" }` |
 | GET | `/files/:projectId/*path` | — | プロジェクト内ファイル(Range 対応) |
@@ -622,6 +685,7 @@ gain は担当の裁量(例: transition 0.7)。同じフレーム・同じスロ
 | POST | `/api/se/rescan` | — | **[v4] `SeListResponse`**(キャッシュ破棄 + 欠けた仮 SE の再生成) |
 | PUT | `/api/se/manifest` | `SeManifestUpdateRequest` | **[v4] `SeListResponse`**(クレジットをマージ) |
 | GET | `/api/se/file/*path` | — | **[v4] SE ファイル(Range 対応、no-cache)** |
+| POST | `/api/se/upload` | multipart `"file"`(`SE_EXTS`、≤ 50 MB) | **`SeListResponse`**(ライブラリ直下に元のファイル名でコピー、§6.12) |
 
 ### 6.1 ソース登録 [v2: 非同期]
 1. path の存在確認(無ければ 400)→ ffprobe(読めなければ 400)。durationSec/fps/width/height/hasAudio はこの時点で確定。
@@ -631,6 +695,25 @@ gain は担当の裁量(例: transition 0.7)。同じフレーム・同じスロ
 4. web は pending のソースがある間 `GET /api/projects/:id` を ~1.5 秒間隔でポーリングする。
 - サーバー起動時: pending のまま残ったソースはプロキシを作り直し、`analysisStatus: "running"` のまま残ったものは `"error"`("Interrupted")にする(`sources.ts` の `recoverInterruptedJobs`)。
   [v3] `audio.bgm.analysisStatus: "running"` のまま残ったものも `"error"` + `analysisError: "Interrupted (server restarted)"`。
+- **画像ソース**(拡張子が `IMAGE_EXTS` = .png .jpg .jpeg .webp .bmp。`@gas/shared` の `IMAGE_EXTS` / `IMAGE_MAX_CLIP_SEC` / `isStillImageSource`)。
+  **動画には変換しない**(画像のまま素材にする):
+  1. ffprobe で画像として読めるか確認しサイズを取る(だめなら 400)。画像は `media/<sourceId>-image<ext>` に置く(このプロジェクトの `media/` にアップロード済みなら移動、それ以外はコピー。元ファイルには触らない)。
+  2. `kind: "image"`, `name`(元のファイル名), `imagePath = "media/<sourceId>-image<ext>"`, `originalPath` = その絶対パス,
+     `proxyPath = "proxies/<sourceId>.webp"`, `thumbPath = "thumbs/<sourceId>.jpg"`, 画像の実寸 width/height, 30 fps,
+     `durationSec = IMAGE_MAX_CLIP_SEC`(60。クリップの in/out の上限として使うだけ), `hasAudio: false`, `proxyStatus: "pending"` で登録して 201 を即返す。
+  3. バックグラウンド(動画のプロキシ枠は使わない)でプレビュー用の静止画(`media.ts` の `makeImageProxy`: WebP、長辺 ≤ 1280、拡大しない、アルファ保持)と
+     サムネイル(`makeImageThumb`: 高さ 360 の jpg、透明部分は暗いグレー)を作って `"ready"`。通常 1 秒未満。
+  4. 描画(§5.7 / `common/ClipTrack.tsx`): Remotion `<Img>`。プレビュー(useProxy)は proxy の webp、レンダーは `imagePath` の元画像(`sourceImageUrl`)。
+     クリップ = 画像を配置された長さ(play + hold)ずっと表示し、`clip.imageMotion` をクリップ内フレームで適用(ease-in-out、サブピクセル):
+     zoomIn 1.00→1.08 / zoomOut 1.08→1.00 / panLeft・panRight = 1.08 倍で ±4% 横移動(panLeft = 視点が画像の左端へ向かう = 絵は右へ流れる)/ none。
+     音は出さない(ゲーム音ダッキング対象外)。ハイライト解析は **409**(§6.5)。レンダー前チェックは `imagePath` のファイルの存在。
+  5. **旧形式**(このネイティブ化より前に登録された `kind: "image"`・`imagePath` 無し・`originalPath = media/<sourceId>.mp4`): 8 秒の静止画動画として
+     **そのまま動画扱い**(描画・編集とも従来どおり)。起動時リカバリで pending のまま残っていて mp4 が無いものだけ、`<sourceId>-image.*` があれば
+     ネイティブ画像ソースに書き換えて(`upgradeLegacyImageSource`)プレビューを作る。mp4 の生成(旧 `makeImageVideo`)は削除済み。
+- **アップロード**(`POST /sources/upload`): multer のディスク保存で `media/<nanoid><ext>` にストリーム保存 → `registerSource(id, 保存パス, { name: 元のファイル名 })`。
+  登録に失敗したら保存ファイルを削除。動画は `originalPath` がその保存パスになる。
+- **削除**: PUT でソースが外れたら(§6.2)、`originalPath` が `projects/<id>/media/` 内ならそのファイル(画像ソースは画像そのもの)と `<sourceId>-image.*` を削除する
+  (ベストエフォート。`media/` の外は決して消さない。生成中に外されたものは生成完了後に削除)。proxies / thumbs は従来どおり残る。
 
 ### 6.2 PUT のマージ規則(`store.ts` の `mergeServerOwned`)[v2]
 web のデバウンス保存が、バックグラウンド処理の結果を古いスナップショットで上書きしないように:
@@ -645,6 +728,7 @@ web のデバウンス保存が、バックグラウンド処理の結果を古�
 - web はさらに: TTS(`POST /tts`)を呼ぶ前に保留中の保存を flush し、応答の Project で state を置き換える。
 
 ### 6.3 アセットアップロード
+- (素材の動画・画像は `/sources/upload` → `media/`。こちらはロゴ・キーアート・BGM・録音用。)
 - 画像(png/jpg/jpeg/webp/gif/svg)+ **音声(mp3/wav/m4a/ogg/aac)** を許可。BGM は upload → `audio.bgm.path` に設定して PUT。
 
 ### 6.4 共有ヘルパ(route モジュールが使うもの)
@@ -663,7 +747,7 @@ web のデバウンス保存が、バックグラウンド処理の結果を古�
 
 ### 6.5 ハイライト解析 [v2](server-highlight)
 `POST /api/projects/:id/sources/:sourceId/analyze`(body なし)
-- 404: プロジェクト/ソースが無い。409: `proxyStatus !== "ready"` または既に `analysisStatus === "running"`。
+- 404: プロジェクト/ソースが無い。409: `proxyStatus !== "ready"` または既に `analysisStatus === "running"`、または画像ソース(`kind: "image"`)。
 - `analysisStatus: "running"`(`analysisError` 削除)にして保存し、**202 で Project を返す**。処理はバックグラウンド。
 - 解析は **プロキシ**(720p/30fps)を入力にしてよい(速い)。時間はソースと同じ時間軸。
   特徴量: シーン切替(`select='gt(scene,X)'` / scdet)、動き(フレーム差分)、音の盛り上がり(`ebur128` / `astats`)。各 0..1 に正規化。
@@ -769,6 +853,8 @@ resolveVoicevoxEnginePath(): Promise<string | null>
 - `GET /api/se` → `{ dir, exists, files: { id, name, durationSec (ffprobe、(size, mtime) でキャッシュ、不明は 0), credit? }[] }`。
 - `POST /api/se/rescan` → 長さキャッシュを捨て、仮 SE / se.json を補ってから一覧を返す(ユーザーがファイルを追加した後に押す)。
 - `PUT /api/se/manifest` body `{ credits: { "<id>": "<credit>" } }` → se.json の該当 id にマージ(`""` = クレジット削除)→ 一覧を返す。
+- `POST /api/se/upload`(multipart `"file"`、`SE_EXTS` のみ、≤ 50 MB = `SE_UPLOAD_MAX_BYTES`)→ ライブラリ直下に元のファイル名でコピー
+  (`\ / : * ? " < > |`・制御文字・先頭のドット・末尾のドット/空白は除去。同名があれば ` (2)`, ` (3)` … を付ける)→ キャッシュ破棄して一覧を返す。
   id の形式は検証する(存在は問わない)。
 - `GET /api/se/file/*path` → ファイル(`sendFileWithRange`、`Cache-Control: no-cache`)。不正 id / 拡張子 → 400、無い → 404。
   URL は `seFileUrl(baseUrl, id)`: プレビュー `/api/se/file/<id>`(相対、Vite プロキシ)、レンダー `http://localhost:<LISTEN_PORT>/api/se/file/<id>`。
@@ -791,6 +877,37 @@ resolveVoicevoxEnginePath(): Promise<string | null>
 - 録音行: text があればそれ(【】付き)を字幕の文言に使い、whisper の書き起こしとの照合(一致率チェック)は stripEmphasis 後で行う。
   text が空なら書き起こし(強調なし)。
 - 字幕の表示側(共通 `<Captions>`)は【】を色付きで描き、括弧は出さない(§4.4)。
+
+### 6.14 BGM ライブラリ(実装: `routes/bgmLibrary.ts` + `bgm/library.ts`、取り込みは `routes/bgm.ts`)
+- 場所: `config.bgm.dir`(既定 `D:\Tools\bgm`、`gas.config.json` の `bgm.dir` / 環境変数 `GAS_BGM_DIR`)。**リポジトリ外**、無ければ起動時・rescan で作る。
+  曲はユーザーが OpenTracks(旧DOVA-SYNDROME)・PeriTune・OtoLogic・魔王魂などから入手して置く。リポジトリにも配布物にも含めない(`.gitignore` で音声拡張子を除外)。
+- ファイル id = ライブラリからの相対パス、区切り `/`(SE と同じ規則 = `seFileIdSchema`)。対象拡張子 `BGM_EXTS` = .mp3 .wav .ogg .m4a .aac .flac。
+  一覧は再帰(深さ 6、ドット始まりは除外、最大 2000 件)、id 昇順。長さは ffprobe((size, mtime) でキャッシュ、不明は 0)。
+- **マニフェスト** `<bgm.dir>/bgm.json`: `{ "version": 1, "files": { "<id>": { credit?, source?, url?, tags?: BgmMood[], note? } } }`(`bgmManifestSchema`)。
+  無ければ空で作る。壊れていたら空として扱う(警告ログ)。書き込みは一時ファイル → rename、直列化。
+- ムードタグ(固定、`BGM_MOODS` in @gas/shared): pop ポップ / upbeat アップテンポ / comedy コミカル・ゆるい / cute かわいい / chiptune チップチューン /
+  edm EDM / epic 壮大 / rock ロック / chill 落ち着き / dark ダーク・緊張 / jingle ジングル。一覧では既知のタグだけを BGM_MOODS 順で返す。
+- 入手先ヒント `BGM_SOURCES` / `bgmSourceInfo(source)`: OpenTracks・PeriTune = クレジット不要、OtoLogic = 「BGM by OtoLogic(CC BY 4.0)」必須、
+  魔王魂 = 「音楽：魔王魂」。web はクレジット必須の入手先でクレジット未設定なら警告を出す。
+- `GET /api/bgm` → `BgmListResponse { dir, exists, files: { id, name, durationSec, credit?, source?, url?, tags, note? }[] }`。
+- `POST /api/bgm/rescan` → キャッシュ破棄 + dir / bgm.json を補って一覧。
+- `PUT /api/bgm/manifest` body `{ files: { "<id>": { credit?, source?, url?, tags?, note? } } }` → id ごと・フィールドごとにマージ
+  (指定したフィールドだけ置換、`""` / `[]` で削除、省略は不変)→ 一覧。
+- `POST /api/bgm/upload`(multipart `"file"`、BGM_EXTS、≤ 100 MB = `BGM_UPLOAD_MAX_BYTES`)→ ライブラリ直下に SE と同じ規則で名前を整えてコピー
+  (同名は ` (2)` …)→ 一覧。
+- `GET /api/bgm/file/*path` → ファイル(Range 対応、`Cache-Control: no-cache`)。試聴用。不正 id / 拡張子 → 400、無い → 404。
+- **プロジェクトへの取り込み** `POST /api/projects/:id/bgm/from-library { id }` → 200 Project:
+  ライブラリのファイルを `assets/<nanoid(10)><ext>` に **コピー**(参照しない — プロジェクトと書き出しを自己完結させ、既存のレンダー経路をそのまま使う)、
+  `audio.bgm` を設定(以前の BGM があれば volume / duckingDb / fadeOutSec / loop を引き継ぎ、無ければ `DEFAULT_BGM`)、beats / bpm / analysisError は消して
+  `analysisStatus: "running"`、`audio.bgm.library = { id, credit?, source?, url? }`(bgm.json のスナップショット)を記録し、§6.11 と同じビート解析をバックグラウンドで開始。
+  404: プロジェクト / ライブラリのファイルが無い。400: 不正 id。古い assets のファイルは消さない(従来のアップロードと同じ)。
+- 直接アップロード(`POST /assets` → web が `audio.bgm` を作り直す従来フロー)は `library` を持たない(= ライブラリのクレジット無し)。
+- **クレジット**: `collectBgmCredits(project)` = BGM があり volume > 0 なら `audio.bgm.library.credit`(言語非依存)。`collectCredits` に含まれるので
+  エンドカード・web のクレジット表示(台本・書き出しの概要欄用)の両方に出る。SE のクレジット(§6.12)の扱いは不変。
+  web は GET /api/bgm を読んだ時(マニフェスト編集後など)、選択中の曲の credit / source / url をスナップショットに入れ直す(web-owned、PUT の body が正)。
+- web(音声タブの BGM 欄): 選択中の曲とクレジット、ライブラリ一覧(曲名検索・ムードタグで絞り込み・▶ 試聴(他は止める)・長さ・入手先 / クレジットのバッジ・「使う」)、
+  ✎ でクレジット / 入手先 / URL / メモ / タグを編集、ドロップ /「追加」でライブラリにコピー、フォルダの場所の表示、おすすめの入手先と注意
+  (TikTok などで流行中の楽曲は広告の動画ファイルに焼き込めない)。
 
 ## 7. Web(`@gas/web`, Vite :5173)
 
@@ -821,6 +938,17 @@ resolveVoicevoxEnginePath(): Promise<string | null>
     録音の差し替え/ text 変更で stale。試聴は録音ファイルそのもの(`/files/...`)を再生。速度欄は隠す。
   - `line.warning` があれば行に注意アイコン+文言。クレジットは `collectCredits(project, lang, voicevoxVoices)`(独自実装は削除)。
   - TTS 状態に `whisper.multilingual` を表示(あれば)。
+- [素材アップロード / 画像ソース] 画面に追加/変更するもの:
+  - ドロップ: 共通フック `hooks/useFileDrop.ts`(`useFileDrop` = dragenter/leave カウンタ + 「ここにドロップ」強調、拡張子で受け付け)。
+    `main.tsx` の `preventFileNavigation()` でアプリのどこにファイルを落としてもブラウザが開かないようにする。
+    ドロップ先: 素材パネル(動画・画像を複数、`POST /sources/upload` を XHR で送り進捗・エラーを表示。絶対パス入力も従来どおり)、
+    ロゴ / キーアート(画像)、BGM(音声)、台本の録音行(音声)、SE ライブラリ(音声 → `POST /api/se/upload` → 一覧更新)。
+    それ以外の場所に落とした場合はエディタ全体のオーバーレイ(`useWindowFileDrop`)が受け、動画・画像は素材へ、その他は置き場所を案内する短いメッセージ。
+  - 画像ソース: 「画像」バッジ + 画像サイズ、見どころ検出ボタンは出さない、「クリップに追加」= 本編スロットに [0, 3 秒] のクリップを追加。
+    ネイティブ画像ソースのクリップ編集(`ImageClipEditor`、`ClipMarker` が `isStillImageSource` で切り替え)は IN/OUT の代わりに
+    「長さ」(秒、0.5〜IMAGE_MAX_CLIP_SEC、プリセット 2/3/5/8 秒 → inSec 0 / outSec = 長さ)と「動き」(なし / ズームイン / ズームアウト / 左へパン / 右へパン
+    = `clip.imageMotion`)、スロット、9:16 crop 時は focusX。プレビュー欄は proxy 画像に動きを CSS アニメーションでループ表示。クリップ一覧は「画像 · 長さ · 動き」。
+    ソース名は `name`(無ければ originalPath の basename)を表示。
 - [v4] 画面に追加/変更するもの(web 担当、`apps/web/src/**`):
   - テンプレート選択に「紹介動画風」(`intro`)を追加(`TEMPLATE_INFO` / アイコン)。intro を選んだら 9:16 プレビューを推奨表示。
     (step 1 で `ClipList` / `ProjectList` の Record に intro のラベルだけ足してある。文言は自由に変えてよい)

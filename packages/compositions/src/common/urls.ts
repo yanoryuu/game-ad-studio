@@ -23,7 +23,7 @@ export function assetUrl(baseUrl: string, projectId: string, relPath: string): s
 }
 
 /**
- * URL of a source video.
+ * URL of a source video (NOT for native image sources: use sourceImageUrl, they are not videos).
  * useProxy=true  -> /files/:pid/<source.proxyPath>
  * useProxy=false -> /api/projects/:pid/sources/:sid/original
  * Throws if the source does not exist.
@@ -36,6 +36,18 @@ export function sourceUrl(baseUrl: string, project: Project, sourceId: string, u
     baseUrl,
     `/api/projects/${encodeURIComponent(project.id)}/sources/${encodeURIComponent(sourceId)}/original`,
   );
+}
+
+/**
+ * URL of a native image source's picture (isStillImageSource): useProxy=true -> the preview still
+ * (/files/:pid/<source.proxyPath>, <= 1280 px); useProxy=false -> the full-resolution image
+ * (/files/:pid/<source.imagePath>). Throws if the source does not exist or is not a native image.
+ */
+export function sourceImageUrl(baseUrl: string, project: Project, sourceId: string, useProxy: boolean): string {
+  const source = project.sources.find((s) => s.id === sourceId);
+  if (!source) throw new Error(`Unknown sourceId: ${sourceId}`);
+  if (!source.imagePath) throw new Error(`Source ${sourceId} is not an image source`);
+  return assetUrl(baseUrl, project.id, useProxy ? source.proxyPath : source.imagePath);
 }
 
 /**

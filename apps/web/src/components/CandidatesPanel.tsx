@@ -10,7 +10,7 @@ import {
   type ArrangeOrder,
 } from "../autoArrange";
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
-import { basename, cx, formatSec, formatTime } from "../util";
+import { sourceName, cx, formatSec, formatTime } from "../util";
 import type { MarkerCue } from "./ClipMarker";
 import { Banner, Empty, Icon, Meter, Section, Segmented, Spinner } from "./ui";
 
@@ -25,6 +25,8 @@ export function CandidatesPanel(props: {
   activeCandidateId: string | null;
   onShowClips: () => void;
   serverOk: boolean;
+  /** image sources: add a main-slot clip [0, 3 s] (they cannot be analyzed) */
+  onAddImageClip?: (sourceId: string) => void;
 }) {
   const { project, source, update } = props;
   const [sort, setSort] = useState<SortKey>("score");
@@ -66,12 +68,28 @@ export function CandidatesPanel(props: {
 
       <Section
         title="見どころ候補"
-        aside={source ? <span className="muted cands-src" title={source.originalPath}>{basename(source.originalPath)}</span> : null}
+        aside={source ? <span className="muted cands-src" title={source.originalPath}>{sourceName(source)}</span> : null}
       >
         {!source ? (
           <Empty compact icon={<Icon.Film size={22} />} title="素材がありません">
             「素材」タブで動画を登録してください。
           </Empty>
+        ) : source.kind === "image" ? (
+          <div className="analyze-row">
+            {props.onAddImageClip ? (
+              <button
+                className="btn"
+                onClick={() => props.onAddImageClip?.(source.id)}
+                disabled={source.proxyStatus !== "ready"}
+                title="本編の最後に 3 秒のクリップとして追加"
+              >
+                <Icon.Plus /> クリップに追加
+              </button>
+            ) : null}
+            <div className="analyze-note">
+              <span>画像の素材は見どころ検出の対象外です。「クリップに追加」で本編に入れ、長さはクリップ編集で調整します。</span>
+            </div>
+          </div>
         ) : (
           <>
             <div className="analyze-row">

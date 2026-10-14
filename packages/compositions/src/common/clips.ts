@@ -107,6 +107,8 @@ export function consumeFrames(segs: Segment[], frames: number, minRestFrames: nu
  *   than MIN_CLIP_SEC, drops clips from the end (overflow) and retries.
  * - Shorter than target: extends clips past outSec into the source proportionally (as far as the source
  *   allows); anything still missing is a hold on the last frame of the last clip.
+ * Native image sources (durationSec = IMAGE_MAX_CLIP_SEC) extend like any source; ClipTrack shows an image clip
+ * for its whole placed length (playFrames + holdFrames, motion over all of it), so a "hold" is just more image.
  */
 export function fitSegments(segs: Segment[], target: number, minFrames: number, keyPrefix: string): PlacedClip[] {
   if (segs.length === 0 || target <= 0) return [];

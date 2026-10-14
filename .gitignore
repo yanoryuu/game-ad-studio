@@ -21,3 +21,7 @@ gas.config.json
 /se/
 /_placeholder/
 /se.json
+
+# BGM library: lives OUTSIDE the repo (config bgm.dir, default D:\Tools\bgm, incl. bgm.json). Never commit / redistribute music.
+/bgm/
+/bgm.json

@@ -42,5 +42,5 @@ export {
 export { NoFootage } from "./NoFootage";
 export { jaPhrases } from "./phrases";
 export { isVertical, outline, readableOn, unitFor, withAlpha } from "./theme";
-export { assetUrl, seFileUrl, sourceUrl } from "./urls";
+export { assetUrl, seFileUrl, sourceImageUrl, sourceUrl } from "./urls";
 export { Watermark } from "./Watermark";

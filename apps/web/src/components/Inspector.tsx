@@ -1,7 +1,8 @@
 import { useRef, useState } from "react";
-import type { DurationSec, Format, Fps, Game, Lang, Project } from "@gas/shared";
+import { isShortTemplate, SHORT_TEMPLATE_META, type DurationSec, type Format, type Fps, type Game, type Lang, type Project } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import { api, errorMessage } from "../api";
+import { hasExt, LOGO_IMAGE_EXTS, useFileDrop } from "../hooks/useFileDrop";
 import type { UpdateProject } from "../hooks/useProject";
 import { cx } from "../util";
 import { Field, Icon, Section, Segmented, Spinner } from "./ui";
@@ -89,6 +90,8 @@ export function Inspector(props: {
               ? "トレーラー風では使いません(構成タブのテロップを使います)"
               : project.template === "intro"
                 ? "紹介動画風では使いません(構成タブの見出し帯を使います)"
+              : isShortTemplate(project.template)
+                ? `ショート向けテンプレートでは使いません(構成タブの${SHORT_TEMPLATE_META[project.template].fields.title?.label ?? "設定"}を使います)`
               : project.template === "features"
                 ? "タイトルと一緒に冒頭に出る一言"
                 : "冒頭に大きく出る一言"
@@ -105,7 +108,17 @@ export function Inspector(props: {
             onChange={(e) => setText("hook", e.target.value)}
           />
         </Field>
-        <Field label="CTA" hint="エンドカードの呼びかけ" htmlFor="txt-cta">
+        <Field
+          label="CTA"
+          hint={
+            project.template === "loop"
+              ? "最後に小さく重ねる呼びかけ(無限ループはエンドカード無し)"
+              : project.template === "dev-pitch"
+                ? "エンドカードと、下部に常時出る CTA バーの呼びかけ"
+                : "エンドカードの呼びかけ"
+          }
+          htmlFor="txt-cta"
+        >
           <input
             id="txt-cta"
             className="input"
@@ -221,6 +234,10 @@ function AssetSlot(props: {
 
   const upload = async (file: File | undefined) => {
     if (!file) return;
+    if (!hasExt(LOGO_IMAGE_EXTS, file.name)) {
+      setError("png / jpg / webp / gif / svg の画像を選んでください");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -234,18 +251,21 @@ function AssetSlot(props: {
     }
   };
 
+  const drop = useFileDrop({
+    accept: LOGO_IMAGE_EXTS,
+    disabled: busy,
+    onFiles: (files) => void upload(files[0]),
+    onReject: () => setError("png / jpg / webp / gif / svg の画像を選んでください"),
+  });
+
   return (
-    <div className={cx("asset", props.wide && "asset-wide")}>
+    <div className={cx("asset", props.wide && "asset-wide")} {...drop.dropProps}>
       <div className="field-label">{props.label}</div>
       <button
         type="button"
-        className={cx("asset-drop", props.value && "has-image")}
+        className={cx("asset-drop", props.value && "has-image", drop.over && "is-drop-over")}
+        data-drop-label="ここにドロップ"
         onClick={() => inputRef.current?.click()}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          void upload(e.dataTransfer.files[0]);
-        }}
         disabled={busy}
         title="クリックまたはドロップで画像を選択"
       >

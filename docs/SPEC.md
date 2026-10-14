@@ -27,6 +27,7 @@ Remotion を使った、PC インディーゲーム向け広告動画の半自�
 |---|---|
 | project.json | schemaVersion 2。読み込み時に `migrateProject` で v1 → v2 を自動変換(詳細は ARCHITECTURE §4) |
 | ソース取り込み | 登録は即時に返し、プロキシ生成はバックグラウンド(`proxyStatus`: pending → ready / error)。UI はポーリング |
+| 素材のドラッグ&ドロップ / 画像素材 | 動画・画像はパス入力に加えてドロップ(複数可)でアップロードできる(プロジェクトの `media/` に保存)。画像は動画に変換せず画像のまま素材にする(待ち時間なし・高画質。クリップごとに長さ(最大 60 秒)と動き: なし / ズームイン(既定)/ ズームアウト / 左右パン。16:9・9:16 blur / crop とも動画と同じ配置。解析は不可、「クリップに追加」で 3 秒のクリップ)。ロゴ・キーアート・BGM・録音・効果音ライブラリもそれぞれの欄にドロップ可 |
 | ハイライト候補 | ソースごとに解析ボタン → 2〜6 秒の候補(score と scene/motion/loudness 特徴量、サムネ付き)→ 採用で clip 化 |
 | 台本 | 言語 × セクション(hook/main/cta)ごとに複数行。行ごとに声・速度・オフセット。text/voice を変えたら stale |
 | 日本語 TTS | VOICEVOX ENGINE(`D:\Tools\voicevox`、既定 ずんだもん ノーマル = style 3)。字幕タイミングは audio_query のモーラ長 |
@@ -83,6 +84,7 @@ Remotion を使った、PC インディーゲーム向け広告動画の半自�
 | 9:16 / 16:9 | 9:16: 上 = 見出し帯、中央 = 16:9 映像(1080×608、y=656)、下 = 大きな字幕。vertical.mode(blur/crop)は intro では使わない。16:9: 映像は全面、見出しは上部バー、情報カードは右パネル |
 | 効果音スロット | captionPop / headline / point / info / transition / cta。テンプレートがイベントを出し、共通部品が鳴らす(字幕ごとの pop は共通側で自動付与、テンプレートが opt-in)。効果音を鳴らすのは intro だけ(既存テンプレートの音は変えない) |
 | SE ライブラリ | `D:\Tools\se`(`gas.config.json` の `se.dir` で変更可)。サブフォルダ自由。クレジットは `se.json`(ファイル → credit)に保存し UI から編集。仮 SE(ffmpeg で合成した 6 種)を `_placeholder/` に自動生成し、既定で全スロットに割り当て |
+| BGM ライブラリ | `D:\Tools\bgm`(`gas.config.json` の `bgm.dir` で変更可、リポジトリ外)。曲ごとにクレジット・入手先・URL・ムードタグを `bgm.json` に保存し UI から編集。音声タブで検索・タグ絞り込み・試聴して「使う」とプロジェクトの assets にコピーしてビート解析、クレジットはエンドカードと概要欄の表記に入る。おすすめ: OpenTracks(旧DOVA-SYNDROME)・PeriTune(クレジット不要)、OtoLogic・魔王魂(表記必須)。流行中の TikTok 楽曲は広告ファイルに焼き込めない |
 | SE のクレジット | project に `audio.se.credits`(使っているファイルのクレジットのスナップショット、web が同期)を持ち、`collectCredits` とエンドカードに出す |
 | SE の配信 | `GET /api/se/file/<ライブラリ内パス>`(プレビューは相対 URL、書き出しは `http://localhost:<port>`)。書き出し時に存在しないファイルのスロットは外す |
 

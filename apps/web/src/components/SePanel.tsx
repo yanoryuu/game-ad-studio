@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SE_PLACEHOLDER_DIR, SE_SLOTS, templateUsesSe, type Project, type SeFile, type SeSettings, type SeSlot } from "@gas/shared";
 import { seFileUrl } from "@gas/compositions";
 import { errorMessage } from "../api";
+import { acceptAttr, AUDIO_EXTS, useFileDrop } from "../hooks/useFileDrop";
 import type { UpdateProject } from "../hooks/useProject";
 import { seFilesOf, useSeLibrary } from "../hooks/useSeLibrary";
 import { useAudioPlayer } from "../hooks/useTts";
@@ -28,8 +29,37 @@ export function SePanel(props: { project: Project; update: UpdateProject; server
   const player = useAudioPlayer();
   const se = project.audio.se;
   const files = seFilesOf(lib.state);
-  const [busy, setBusy] = useState<"rescan" | null>(null);
+  const [busy, setBusy] = useState<"rescan" | "upload" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [added, setAdded] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  /** Copies dropped / chosen audio files into the library root (POST /api/se/upload), one by one. */
+  const uploadFiles = async (list: File[]) => {
+    if (!list.length) return;
+    setBusy("upload");
+    setMsg(null);
+    setAdded(null);
+    const done: string[] = [];
+    try {
+      for (const f of list) {
+        await lib.upload(f);
+        done.push(f.name);
+      }
+      setAdded(`${done.join(", ")} をライブラリに追加しました`);
+    } catch (e) {
+      setMsg(`追加できません: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const drop = useFileDrop({
+    accept: AUDIO_EXTS,
+    multiple: true,
+    disabled: busy !== null || !props.serverOk || !usesSe,
+    onFiles: (f) => void uploadFiles(f),
+    onReject: (f) => setMsg(`効果音にできるのは .wav / .mp3 / .ogg / .m4a / .aac です: ${f.map((x) => x.name).join(", ")}`),
+  });
 
   const setSe = (fn: (s: SeSettings) => SeSettings) => update((p) => ({ ...p, audio: { ...p.audio, se: fn(p.audio.se) } }));
   const setSlot = (slot: SeSlot, id: string) =>
@@ -63,7 +93,7 @@ export function SePanel(props: { project: Project; update: UpdateProject; server
         <div className="se-off-note">
           <Icon.Speaker size={14} />
           <span>
-            効果音は <b>紹介動画風</b> テンプレートでのみ鳴ります(見出し・ポイント・情報カード・場面転換・字幕の出現)。
+            効果音は <b>紹介動画風</b> と <b>ショート向け</b> のテンプレートでのみ鳴ります(見出し・ポイント・情報カード・場面転換・字幕の出現など)。
             このテンプレートでは鳴りません。
           </span>
         </div>
@@ -87,7 +117,7 @@ export function SePanel(props: { project: Project; update: UpdateProject; server
         title="効果音"
         aside={<Switch checked={se.enabled} onChange={(enabled) => setSe((s) => ({ ...s, enabled }))} label="鳴らす" />}
       >
-        <div className="field-hint">紹介動画風でのみ鳴ります。ナレーション中も音量は下げません。</div>
+        <div className="field-hint">紹介動画風とショート向けテンプレートでのみ鳴ります。ナレーション中も音量は下げません。</div>
         <Slider
           label="効果音の音量"
           value={se.volume}
@@ -156,11 +186,33 @@ export function SePanel(props: { project: Project; update: UpdateProject; server
       <Section
         title="SE ライブラリ"
         aside={
+          <span className="se-lib-actions">
+          <button
+            className="btn btn-sm"
+            onClick={() => fileRef.current?.click()}
+            disabled={busy !== null || !props.serverOk}
+            title="音声ファイルをライブラリのフォルダにコピー(ドロップでも追加できます)"
+          >
+            {busy === "upload" ? <Spinner size={11} /> : <Icon.Upload size={13} />} 追加
+          </button>
           <button className="btn btn-sm" onClick={() => void rescan()} disabled={busy !== null || !props.serverOk} title="POST /api/se/rescan">
             {busy === "rescan" ? <Spinner size={11} /> : <Icon.Refresh size={13} />} フォルダを再読み込み
           </button>
+          </span>
         }
       >
+        <input
+          ref={fileRef}
+          type="file"
+          accept={acceptAttr(AUDIO_EXTS)}
+          multiple
+          hidden
+          onChange={(e) => {
+            void uploadFiles(Array.from(e.target.files ?? []));
+            e.target.value = "";
+          }}
+        />
+        <div className={cx("drop-zone se-drop", drop.over && "is-drop-over")} data-drop-label="ここにドロップして効果音を追加" {...drop.dropProps}>
         {lib.state.kind === "loading" || lib.state.kind === "idle" ? (
           <div className="field-hint">
             <Spinner size={10} /> 読み込み中…
@@ -181,12 +233,13 @@ export function SePanel(props: { project: Project; update: UpdateProject; server
             <LibDir dir={lib.state.data.dir} exists={lib.state.data.exists} />
             <div className="se-guide">
               効果音ラボ・OtoLogic などのフリー素材(.wav / .mp3 / .ogg / .m4a / .aac)をこのフォルダ(サブフォルダ可)に置き、
-              「フォルダを再読み込み」を押すと選べるようになります。素材は各サイトの利用規約に従ってください(リポジトリには含めません)。
+              「フォルダを再読み込み」を押すと選べるようになります(ここにドロップ /「追加」でもフォルダにコピーできます)。素材は各サイトの利用規約に従ってください(リポジトリには含めません)。
               クレジット表記が必要な素材は下の欄に入力すると、書き出しのクレジット一覧とエンドカードに出ます。
             </div>
           </>
         )}
         {msg ? <div className="field-hint warn">{msg}</div> : null}
+        {added ? <div className="field-hint">{added}</div> : null}
 
         {files ? (
           <>
@@ -217,6 +270,7 @@ export function SePanel(props: { project: Project; update: UpdateProject; server
             </details>
           </>
         ) : null}
+        </div>
       </Section>
     </>
   );

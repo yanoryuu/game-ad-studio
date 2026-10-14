@@ -1,8 +1,19 @@
+import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import type { Express } from "express";
-import type { BgmAnalyzeStartResponse } from "@gas/shared";
+import { nanoid } from "nanoid";
+import {
+  bgmFromLibraryRequestSchema,
+  DEFAULT_BGM,
+  type Bgm,
+  type BgmAnalyzeStartResponse,
+  type BgmFromLibraryResponse,
+  type BgmLibraryRef,
+} from "@gas/shared";
 import { analyzeBeats } from "../beats";
-import { HttpError, notFound } from "../errors";
+import { bgmMetaOf, readBgmManifest, resolveBgmFile } from "../bgm/library";
+import { HttpError, notFound, parseBody } from "../errors";
 import { projectDir } from "../paths";
 import { assertSafeId, projectExists, updateProject } from "../store";
 
@@ -10,6 +21,8 @@ import { assertSafeId, projectExists, updateProject } from "../store";
  * BGM routes (owner: server agent; beat detection in src/beats/**). Contract: ARCHITECTURE §6.11.
  *
  *   POST /api/projects/:id/bgm/analyze -> 202 Project (audio.bgm.analysisStatus "running"), runs in background
+ *   POST /api/projects/:id/bgm/from-library { id } -> Project: copies a BGM library track (§6.14) into assets/,
+ *        sets audio.bgm (+ library snapshot) and starts the beat analysis like /bgm/analyze
  */
 
 const running = new Set<string>();
@@ -64,5 +77,41 @@ export function registerBgmRoutes(app: Express): void {
     void runBeatJob(id, bgmPath);
     const body: BgmAnalyzeStartResponse = project;
     res.status(202).json(body);
+  });
+
+  app.post("/api/projects/:id/bgm/from-library", async (req, res) => {
+    const id = assertSafeId(String(req.params.id));
+    const { id: fileId } = parseBody(bgmFromLibraryRequestSchema, req.body);
+    if (!(await projectExists(id))) throw notFound(`Project not found: ${id}`);
+    const src = resolveBgmFile(fileId);
+    if (!fs.existsSync(src) || !fs.statSync(src).isFile()) throw notFound(`BGM library file not found: ${fileId}`);
+    const meta = bgmMetaOf(await readBgmManifest(), fileId);
+    const library: BgmLibraryRef = {
+      id: fileId,
+      ...(meta.credit ? { credit: meta.credit } : {}),
+      ...(meta.source ? { source: meta.source } : {}),
+      ...(meta.url ? { url: meta.url } : {}),
+    };
+    // Copy (never reference) so the project / renders stay self-contained.
+    const assetsDir = path.join(projectDir(id), "assets");
+    await fsp.mkdir(assetsDir, { recursive: true });
+    const name = `${nanoid(10)}${path.extname(src).toLowerCase()}`;
+    await fsp.copyFile(src, path.join(assetsDir, name));
+    const bgmPath = `assets/${name}`;
+    const project = await updateProject(id, (p) => {
+      const prev = p.audio.bgm;
+      const bgm: Bgm = {
+        ...DEFAULT_BGM,
+        ...(prev ? { volume: prev.volume, duckingDb: prev.duckingDb, fadeOutSec: prev.fadeOutSec, loop: prev.loop } : {}),
+        path: bgmPath,
+        analysisStatus: "running",
+        library,
+      };
+      p.audio = { ...p.audio, bgm };
+    });
+    console.log(`[bgm] ${id}: library "${fileId}" -> ${bgmPath}`);
+    void runBeatJob(id, bgmPath);
+    const body: BgmFromLibraryResponse = project;
+    res.json(body);
   });
 }

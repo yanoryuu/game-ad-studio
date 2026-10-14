@@ -69,8 +69,10 @@ export function useSeLibrary(enabled = true) {
   const rescan = useCallback(() => run(api.rescanSe, true), []);
   /** PUT /api/se/manifest: id -> credit ("" removes it). */
   const saveCredits = useCallback((credits: Record<string, string>) => run(() => api.updateSeManifest({ credits }), true), []);
+  /** POST /api/se/upload: copies an audio file into the library root, then the list is refreshed. */
+  const upload = useCallback((file: File) => run(() => api.uploadSe(file), true), []);
 
-  return { state, reload, rescan, saveCredits };
+  return { state, reload, rescan, saveCredits, upload };
 }
 
 /** Files of a loaded library, or undefined (loading / error / idle). */

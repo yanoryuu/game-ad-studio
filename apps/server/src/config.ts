@@ -44,6 +44,14 @@ export type GasConfig = {
      */
     dir: string;
   };
+  /** BGM library (ARCHITECTURE §6.14) */
+  bgm: {
+    /**
+     * Folder with the user's free BGM tracks (any subfolders) + the manifest "bgm.json". Never inside the repo.
+     * Created when missing. Env GAS_BGM_DIR overrides it (test instances).
+     */
+    dir: string;
+  };
 };
 
 export const CONFIG_FILE = path.join(REPO_ROOT, "gas.config.json");
@@ -54,6 +62,7 @@ export const DEFAULT_CONFIG: GasConfig = {
   piper: { exePath: "D:\\Tools\\piper\\piper.exe", voicesDir: "D:\\Tools\\piper\\voices" },
   whisper: { dir: "D:\\Tools\\whisper", model: "base.en", multilingualModel: "small" },
   se: { dir: "D:\\Tools\\se" },
+  bgm: { dir: "D:\\Tools\\bgm" },
 };
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -81,6 +90,7 @@ function loadConfig(): GasConfig {
       multilingualModel: str(user.whisper?.multilingualModel, DEFAULT_CONFIG.whisper.multilingualModel),
     },
     se: { dir: path.resolve(str(process.env.GAS_SE_DIR, str(user.se?.dir, DEFAULT_CONFIG.se.dir))) },
+    bgm: { dir: path.resolve(str(process.env.GAS_BGM_DIR, str(user.bgm?.dir, DEFAULT_CONFIG.bgm.dir))) },
   };
   const enginePath = user.voicevox?.enginePath;
   if (typeof enginePath === "string" && enginePath.trim()) cfg.voicevox.enginePath = enginePath.trim();

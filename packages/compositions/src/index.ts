@@ -12,6 +12,6 @@ export { HOOK_SEC, END_CARD_SEC, MAX_HOOK_SEC, MAX_END_CARD_SEC } from "./templa
 export { buildNarrationPlan, type NarrationPlan, type PlacedNarration } from "./narration";
 export { getTemplate, TEMPLATES } from "./templates";
 export type { SectionKind, TemplateModule, TemplateRenderProps, TemplateTimeline, TimelineSectionInfo } from "./templates/types";
-export { assetUrl, seFileUrl, sourceUrl } from "./common/urls";
+export { assetUrl, seFileUrl, sourceImageUrl, sourceUrl } from "./common/urls";
 export { buildSeSchedule, SE_MAX_SEC, type ScheduledSe, type SeEvent } from "./common/SeTrack";
 export { COMPOSITION_ID } from "./constants";

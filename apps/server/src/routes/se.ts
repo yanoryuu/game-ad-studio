@@ -1,6 +1,8 @@
+import path from "node:path";
 import type { Express } from "express";
-import { seManifestUpdateRequestSchema, type SeListResponse } from "@gas/shared";
-import { parseBody } from "../errors";
+import multer from "multer";
+import { SE_EXTS, SE_UPLOAD_MAX_BYTES, seManifestUpdateRequestSchema, type SeListResponse } from "@gas/shared";
+import { badRequest, parseBody } from "../errors";
 import { sendFileWithRange } from "../files";
 import { ensurePlaceholders } from "../se/placeholders";
 import {
@@ -8,6 +10,8 @@ import {
   ensureManifest,
   listSeLibrary,
   resolveSeFile,
+  sanitizeSeFileName,
+  saveSeUpload,
   seDir,
   updateManifestCredits,
 } from "../se/library";
@@ -19,7 +23,20 @@ import {
  *   POST /api/se/rescan       -> SeListResponse (clears the duration cache, regenerates missing placeholders)
  *   PUT  /api/se/manifest     SeManifestUpdateRequest { credits: { <id>: "<credit>" | "" } } -> SeListResponse
  *   GET  /api/se/file/*path   the audio file (Range, no-cache), path-safe inside the library dir
+ *   POST /api/se/upload       multipart "file" (SE_EXTS, ≤ 50 MB) -> copied into the library root -> SeListResponse
  */
+
+/** In memory (≤ 50 MB), then written with an exclusive flag so name collisions get " (2)" etc. */
+const seUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: SE_UPLOAD_MAX_BYTES, files: 1 },
+  defParamCharset: "utf8", // browsers send UTF-8 file names (Japanese)
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if ((SE_EXTS as readonly string[]).includes(ext)) cb(null, true);
+    else cb(badRequest(`Unsupported SE file type "${ext || file.originalname}". Allowed: ${SE_EXTS.join(", ")}`));
+  },
+});
 
 /** Startup: create the library dir's placeholders + se.json when missing (background, never throws). */
 export async function initSeLibrary(): Promise<void> {
@@ -43,6 +60,15 @@ export function registerSeRoutes(app: Express): void {
   app.put("/api/se/manifest", async (req, res) => {
     const { credits } = parseBody(seManifestUpdateRequestSchema, req.body);
     await updateManifestCredits(credits);
+    const body: SeListResponse = await listSeLibrary();
+    res.json(body);
+  });
+
+  app.post("/api/se/upload", seUpload.single("file"), async (req, res) => {
+    if (!req.file) throw badRequest('Missing multipart file field "file"');
+    const id = await saveSeUpload(sanitizeSeFileName(req.file.originalname), req.file.buffer);
+    console.log(`[se] uploaded "${req.file.originalname}" -> ${id}`);
+    clearSeCache();
     const body: SeListResponse = await listSeLibrary();
     res.json(body);
   });

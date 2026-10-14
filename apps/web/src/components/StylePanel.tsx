@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { EMPHASIS_COLORS } from "@gas/shared";
+import { EMPHASIS_COLORS, isShortTemplate } from "@gas/shared";
 import type { CaptionStyle, Format, Project, Style, VerticalMode, Watermark, WatermarkPosition } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import type { UpdateProject } from "../hooks/useProject";
@@ -64,6 +64,10 @@ export function StylePanel(props: {
         </div>
         {project.template === "intro" ? (
           <div className="field-hint warn">紹介動画風では使いません(9:16 は常に「上:見出し帯 / 中央:16:9 映像 / 下:字幕」のレイアウト)。</div>
+        ) : isShortTemplate(project.template) ? (
+          <div className="field-hint">
+            ショート向けテンプレートでは「クロップ」= 映像を縦いっぱいに、「ぼかし背景」= 中央に 16:9 の映像帯 + 上下に文字、として使います(テンプレートによっては固定のレイアウトになります)。
+          </div>
         ) : null}
         {vmode === "crop" ? (
           <div className="field-hint">
@@ -130,6 +134,9 @@ export function StylePanel(props: {
           disabled={wm.position === "none"}
         />
         {project.template === "intro" ? <div className="field-hint warn">紹介動画風ではウォーターマークを出しません(見出し帯が担います)。</div> : null}
+        {isShortTemplate(project.template) ? (
+          <div className="field-hint warn">ショート向けテンプレートではウォーターマークを出しません(上部の大きな文字・エンドカードが担います)。</div>
+        ) : null}
         {!project.game.logo ? <div className="field-hint">ロゴ未設定のときはタイトル文字を表示します(「設定」タブで登録)。</div> : null}
       </Section>
 

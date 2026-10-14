@@ -4,7 +4,7 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { bundle } from "@remotion/bundler";
 import { renderMedia, selectComposition } from "@remotion/renderer";
-import { type Format, type Fps, type Lang, type Project, type RenderJob } from "@gas/shared";
+import { isStillImageSource, type Format, type Fps, type Lang, type Project, type RenderJob } from "@gas/shared";
 // type-only: importing the compositions package at runtime would pull React/fonts into the server process
 import type { AdVideoProps } from "@gas/compositions";
 import { notFound } from "./errors";
@@ -170,7 +170,12 @@ function timestamp(d = new Date()): string {
 function checkSources(project: Project) {
   const used = new Set(project.clips.map((c) => c.sourceId));
   for (const s of project.sources) {
-    if (used.has(s.id) && !fs.existsSync(s.originalPath)) {
+    if (!used.has(s.id)) continue;
+    // native image source: rendered from its imagePath (full resolution) via /files
+    if (isStillImageSource(s)) {
+      const img = path.join(projectDir(project.id), s.imagePath!);
+      if (!fs.existsSync(img)) throw new Error(`Image of source ${s.id} not found: ${img}`);
+    } else if (!fs.existsSync(s.originalPath)) {
       throw new Error(`Original video of source ${s.id} not found: ${s.originalPath}`);
     }
   }

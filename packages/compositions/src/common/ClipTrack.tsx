@@ -1,8 +1,8 @@
 import type React from "react";
-import { AbsoluteFill, Freeze, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig, Easing } from "remotion";
-import type { Format, Project } from "@gas/shared";
+import { AbsoluteFill, Freeze, Img, interpolate, OffthreadVideo, Sequence, useCurrentFrame, useVideoConfig, Easing } from "remotion";
+import { DEFAULT_IMAGE_MOTION, isStillImageSource, type Format, type ImageMotion, type Project, type Source } from "@gas/shared";
 import type { PlacedClip } from "./clips";
-import { sourceUrl } from "./urls";
+import { sourceImageUrl, sourceUrl } from "./urls";
 import { isVertical, unitFor } from "./theme";
 import { BODY_FONT } from "./fonts";
 import { gameDuckGain } from "./audioMix";
@@ -59,6 +59,81 @@ const ClipVideo: React.FC<ClipVideoProps> = ({ project, src, clip, format, absFr
     );
   }
   return <AbsoluteFill>{video({ width: "100%", height: "100%", objectFit: "cover" }, false)}</AbsoluteFill>;
+};
+
+/** Zoom of the image motions: 1.00 <-> IMAGE_MOTION_ZOOM (pans run at this zoom). */
+const IMAGE_MOTION_ZOOM = 1.08;
+/**
+ * Non-vertical formats: an image whose aspect differs so much from the frame that "cover" would cut off more
+ * than this fraction of it (e.g. a wide logo, a portrait screenshot) is shown whole (contain) over a blurred
+ * copy instead, like 9:16 "blur" mode. 16:9-ish images (16:10 and closer) are covered like video.
+ */
+const IMAGE_COVER_MAX_CROP = 0.12;
+const easeInOutSine = Easing.bezier(0.37, 0, 0.63, 1);
+
+/** CSS transform of an image motion at clip progress t (0..1); `w` = layer width in px. */
+export function imageMotionTransform(motion: ImageMotion, t: number, w: number): string {
+  const p = easeInOutSine(Math.min(1, Math.max(0, t)));
+  const z = IMAGE_MOTION_ZOOM;
+  const d = ((z - 1) / 2) * w; // max shift that keeps the zoomed layer covering its box
+  switch (motion) {
+    case "none":
+      return "none";
+    case "zoomIn":
+      return `scale(${1 + (z - 1) * p})`;
+    case "zoomOut":
+      return `scale(${z - (z - 1) * p})`;
+    case "panLeft": // view travels toward the left edge -> picture slides right
+      return `translateX(${(-d + 2 * d * p).toFixed(3)}px) scale(${z})`;
+    case "panRight":
+      return `translateX(${(d - 2 * d * p).toFixed(3)}px) scale(${z})`;
+  }
+}
+
+/**
+ * One native image source (isStillImageSource) shown for the whole clip (play + hold: nothing "runs out"),
+ * laid out like ClipVideo — 16:9 cover (contain over a blurred copy when cover would crop too much, see
+ * IMAGE_COVER_MAX_CROP); 9:16 "blur": contain over a blurred copy; "crop": cover centered at clip.focusX —
+ * with clip.imageMotion driven by the clip-local frame. No audio.
+ */
+const ClipImage: React.FC<{ project: Project; source: Source; clip: PlacedClip; format: Format; src: string; motion: ImageMotion }> = ({
+  project,
+  source,
+  clip,
+  format,
+  src,
+  motion,
+}) => {
+  const frame = useCurrentFrame();
+  const { width, height } = useVideoConfig();
+  const total = clip.playFrames + clip.holdFrames;
+  const t = total > 1 ? frame / (total - 1) : 0;
+  const transform = imageMotionTransform(motion, t, width);
+  const moving: React.CSSProperties = { transform, transformOrigin: "50% 50%" };
+  const pos = `${clip.focusX * 100}% 50%`;
+  const img = (style: React.CSSProperties) => <Img src={src} style={{ width: "100%", height: "100%", ...style }} />;
+
+  const vertical = isVertical(format);
+  const imgAspect = source.width / source.height;
+  const frameAspect = width / height;
+  const coverCrop = 1 - Math.min(imgAspect / frameAspect, frameAspect / imgAspect);
+  const cover = vertical ? project.style.vertical.mode === "crop" : coverCrop <= IMAGE_COVER_MAX_CROP;
+
+  if (cover) {
+    return (
+      <AbsoluteFill style={{ backgroundColor: "black", overflow: "hidden" }}>
+        <AbsoluteFill style={moving}>{img({ objectFit: "cover", objectPosition: vertical ? pos : "50% 50%" })}</AbsoluteFill>
+      </AbsoluteFill>
+    );
+  }
+  return (
+    <AbsoluteFill style={{ backgroundColor: "black", overflow: "hidden" }}>
+      <AbsoluteFill style={{ filter: "blur(40px) brightness(0.55)", transform: "scale(1.25)" }}>
+        {img({ objectFit: "cover", objectPosition: pos })}
+      </AbsoluteFill>
+      <AbsoluteFill style={moving}>{img({ objectFit: "contain" })}</AbsoluteFill>
+    </AbsoluteFill>
+  );
 };
 
 /** Quick "punch" on every cut: slight zoom-in settling + white flash. */
@@ -119,8 +194,25 @@ export const ClipTrack: React.FC<{
             </Sequence>
           );
         }
-        const src = sourceUrl(assetBaseUrl, project, clip.sourceId, useProxy);
         const punch = i > 0 || punchFirst;
+        if (isStillImageSource(source)) {
+          const motion = project.clips.find((c) => c.id === clip.clipId)?.imageMotion ?? DEFAULT_IMAGE_MOTION;
+          return (
+            <Sequence key={clip.key} from={clip.from} durationInFrames={duration} premountFor={Math.round(fps)} name={`image ${clip.clipId}`}>
+              <CutPunch enabled={punch}>
+                <ClipImage
+                  project={project}
+                  source={source}
+                  clip={clip}
+                  format={format}
+                  src={sourceImageUrl(assetBaseUrl, project, clip.sourceId, useProxy)}
+                  motion={motion}
+                />
+              </CutPunch>
+            </Sequence>
+          );
+        }
+        const src = sourceUrl(assetBaseUrl, project, clip.sourceId, useProxy);
         const absFrom = sectionFrom + clip.from;
         return (
           <Sequence key={clip.key} from={clip.from} durationInFrames={duration} premountFor={Math.round(fps)} name={`clip ${clip.clipId}`}>

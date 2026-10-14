@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import type { ProjectSummary } from "@gas/shared";
+import { SHORT_TEMPLATE_IDS, SHORT_TEMPLATE_META, type ProjectSummary } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import { api, errorMessage } from "../api";
 import { navigate } from "../hooks/useHashRoute";
@@ -13,6 +13,7 @@ const TEMPLATE_LABEL: Record<string, string> = {
   features: "魅力紹介",
   trailer: "トレーラー風",
   intro: "紹介動画風",
+  ...Object.fromEntries(SHORT_TEMPLATE_IDS.map((id) => [id, `ショート: ${SHORT_TEMPLATE_META[id].name}`])),
 };
 
 export function ProjectList() {

@@ -115,6 +115,51 @@ export async function ensureManifest(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/* Upload (POST /api/se/upload)                                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * File name for an uploaded SE: the original base name with characters Windows / seFileIdSchema reject removed
+ * (\ / : * ? " < > |, control chars, leading dots, trailing dots/spaces), at most 120 chars before the extension.
+ */
+export function sanitizeSeFileName(original: string): string {
+  const base = original.split(/[\\/]/).pop() ?? "";
+  const ext = path.extname(base).toLowerCase();
+  let stem = base
+    .slice(0, base.length - path.extname(base).length)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f<>:"/\\|?*]/g, "_")
+    .replace(/^[.\s]+/, "")
+    .replace(/[.\s]+$/, "")
+    .slice(0, 120);
+  if (!stem || /^(con|prn|aux|nul|com\d|lpt\d)$/i.test(stem)) stem = `se_${stem || "upload"}`;
+  return `${stem}${ext}`;
+}
+
+/**
+ * Writes an uploaded SE into the library ROOT under `fileName` (already sanitized, SE_EXTS);
+ * an existing name gets " (2)", " (3)", … Returns the new file id (= the stored name).
+ */
+export async function saveSeUpload(fileName: string, data: Buffer): Promise<string> {
+  if (!isSeExt(fileName)) throw badRequest(`Not an SE audio file: ${JSON.stringify(fileName)} (allowed: ${SE_EXTS.join(", ")})`);
+  const dir = seDir();
+  await fsp.mkdir(dir, { recursive: true });
+  const ext = path.extname(fileName);
+  const stem = fileName.slice(0, fileName.length - ext.length);
+  for (let n = 1; n < 1000; n++) {
+    const name = n === 1 ? fileName : `${stem} (${n})${ext}`;
+    try {
+      // "wx": fails if the name exists -> no race between two uploads of the same name
+      await fsp.writeFile(path.join(dir, name), data, { flag: "wx" });
+      return name;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    }
+  }
+  throw badRequest(`Too many files named ${JSON.stringify(fileName)} in the SE library`);
+}
+
+/* ------------------------------------------------------------------ */
 /* Listing                                                              */
 /* ------------------------------------------------------------------ */
 

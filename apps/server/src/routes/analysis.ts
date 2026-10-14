@@ -18,6 +18,7 @@ export function registerAnalysisRoutes(app: Express): void {
     const project = await updateProject(id, (p) => {
       const s = p.sources.find((x) => x.id === sourceId);
       if (!s) throw notFound(`Source not found: ${sourceId}`);
+      if (s.kind === "image") throw new HttpError(409, `${sourceId} is a still image; highlight analysis needs a video source`);
       if (s.proxyStatus !== "ready") throw new HttpError(409, `Proxy of ${sourceId} is not ready (${s.proxyStatus})`);
       if (s.analysisStatus === "running") throw new HttpError(409, `Analysis of ${sourceId} is already running`);
       s.analysisStatus = "running";

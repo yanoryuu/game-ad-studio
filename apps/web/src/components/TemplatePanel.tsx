@@ -2,6 +2,9 @@ import { useMemo } from "react";
 import {
   assignFeatureClips,
   generateId,
+  isShortTemplate,
+  SHORT_TEMPLATE_IDS,
+  SHORT_TEMPLATE_META,
   trailerClipOrder,
   type FeatureItem,
   type Format,
@@ -16,6 +19,7 @@ import { beatState, hasUsableBeats, useBgmAnalyze } from "../hooks/useBgmAnalysi
 import type { MutateOnServer, UpdateProject } from "../hooks/useProject";
 import { basename, cx, formatSec, formatTime } from "../util";
 import { IntroEditor, IntroFormatHint } from "./IntroEditor";
+import { ShortFormEditor } from "./ShortFormEditor";
 import { LangAside, LocalizedInput, moveItem, withoutKey } from "./templateBits";
 import { Banner, Icon, Section, Spinner, Switch } from "./ui";
 
@@ -44,6 +48,8 @@ export function TemplatePanel(props: {
   setFormat: (f: Format) => void;
 }) {
   const { project, update } = props;
+  const select = (id: TemplateId) => update((p) => (p.template === id ? p : { ...p, template: id }));
+  const short = isShortTemplate(project.template) ? project.template : null;
   return (
     <div className="tpl-panel">
       <Section title="テンプレート">
@@ -55,7 +61,7 @@ export function TemplatePanel(props: {
               role="radio"
               aria-checked={project.template === t.id}
               className={cx("tpl", project.template === t.id && "is-active")}
-              onClick={() => update((p) => (p.template === t.id ? p : { ...p, template: t.id }))}
+              onClick={() => select(t.id)}
             >
               <TemplateGlyph id={t.id} />
               <span className="tpl-text">
@@ -68,8 +74,37 @@ export function TemplatePanel(props: {
             </button>
           ))}
         </div>
-        {project.template === "intro" ? (
-          <IntroFormatHint project={project} update={update} format={props.format} setFormat={props.setFormat} />
+        <div className="tpl-group-head">
+          <span>ショート向け(Shorts / TikTok / Reels)</span>
+          <span className="badge tpl-tag">9:16</span>
+        </div>
+        <div className="tpl-grid" role="radiogroup" aria-label="ショート向けテンプレート">
+          {SHORT_TEMPLATE_IDS.map((id) => {
+            const m = SHORT_TEMPLATE_META[id];
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={project.template === id}
+                className={cx("tpl-mini", project.template === id && "is-active")}
+                title={`${m.name} — ${m.desc}`}
+                onClick={() => select(id)}
+              >
+                <span className="tpl-mini-name">{m.name}</span>
+                <span className="tpl-mini-desc">{m.desc}</span>
+              </button>
+            );
+          })}
+        </div>
+        {project.template === "intro" || short ? (
+          <IntroFormatHint
+            project={project}
+            update={update}
+            format={props.format}
+            setFormat={props.setFormat}
+            name={short ? `「${SHORT_TEMPLATE_META[short].name}」` : undefined}
+          />
         ) : null}
         <div className="field-hint">切り替えてもクリップ・台本・各テンプレートの設定はそのまま残ります。</div>
       </Section>
@@ -80,6 +115,8 @@ export function TemplatePanel(props: {
         <TrailerEditor {...props} />
       ) : project.template === "intro" ? (
         <IntroEditor {...props} />
+      ) : short ? (
+        <ShortFormEditor key={short} {...props} id={short} />
       ) : (
         <Section title="王道の構成">
           <ol className="tpl-steps">

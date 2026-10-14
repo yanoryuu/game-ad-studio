@@ -1,14 +1,23 @@
 import { useMemo, useState, type DragEvent } from "react";
-import { assignFeatureClips, trailerClipOrder, type Clip, type ClipSlot, type FeatureItem, type Project, type TemplateId } from "@gas/shared";
+import { DEFAULT_IMAGE_MOTION, isStillImageSource, assignFeatureClips, isShortTemplate, SHORT_TEMPLATE_IDS, SHORT_TEMPLATE_META, trailerClipOrder, type Clip, type ClipSlot, type FeatureItem, type Project, type TemplateId } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
-import { basename, cx, formatSec, formatTime } from "../util";
+import { sourceName, cx, formatSec, formatTime } from "../util";
+import { IMAGE_MOTION_LABEL } from "./ImageClipEditor";
 import { Empty, Icon, Section } from "./ui";
+
+/** v5: slot texts of the short-form templates come from SHORT_TEMPLATE_META. */
+function shortSlotText(key: "label" | "hint") {
+  return Object.fromEntries(
+    SHORT_TEMPLATE_IDS.map((id) => [id, { hook: SHORT_TEMPLATE_META[id].slots.hook[key], main: SHORT_TEMPLATE_META[id].slots.main[key] }]),
+  ) as Record<(typeof SHORT_TEMPLATE_IDS)[number], Record<ClipSlot, string>>;
+}
 
 const SLOT_LABEL: Record<TemplateId, Record<ClipSlot, string>> = {
   "hook-play-cta": { hook: "フック", main: "本編" },
   features: { hook: "タイトル", main: "魅力" },
   trailer: { hook: "フック", main: "本編" },
   intro: { hook: "前半", main: "後半" },
+  ...shortSlotText("label"),
 };
 const SLOT_HINT: Record<TemplateId, Record<ClipSlot, string>> = {
   "hook-play-cta": {
@@ -27,6 +36,7 @@ const SLOT_HINT: Record<TemplateId, Record<ClipSlot, string>> = {
     hook: "台本の行ごとに、フック → 本編の順で映像が切り替わります。",
     main: "フックの後に続く映像(足りなければ先頭に戻って繰り返し)。",
   },
+  ...shortSlotText("hint"),
 };
 const CIRCLED = ["①", "②", "③", "④", "⑤", "⑥"];
 
@@ -86,7 +96,7 @@ export function ClipList(props: {
   const itemIds = new Set(items.map((i) => i.id));
   const assigned = useMemo(() => (featureMode ? assignFeatureClips(project) : {}), [featureMode, project]);
   const trailerIndex = useMemo(
-    () => (tpl === "trailer" || tpl === "intro" ? new Map(trailerClipOrder(project).map((c, i) => [c.id, i])) : null),
+    () => (tpl === "trailer" || tpl === "intro" || isShortTemplate(tpl) ? new Map(trailerClipOrder(project).map((c, i) => [c.id, i])) : null),
     [tpl, project],
   );
 
@@ -202,14 +212,22 @@ export function ClipList(props: {
                               {s ? <img src={assetUrl("", project.id, s.thumbPath)} alt="" loading="lazy" /> : <Icon.Alert />}
                             </button>
                             <button className="clip-info" onClick={() => props.onEdit(c)} title="編集">
-                              <span className="clip-src">{s ? basename(s.originalPath) : "素材が見つかりません"}</span>
-                              <span className="clip-range mono">
-                                {formatTime(c.inSec)} – {formatTime(c.outSec)}
-                                <span className="clip-len">{formatSec(c.outSec - c.inSec)}</span>
-                                <span className="clip-vol" title="ゲーム音">
-                                  ♪{Math.round(c.gameVolume * 100)}
+                              <span className="clip-src">{s ? sourceName(s) : "素材が見つかりません"}</span>
+                              {isStillImageSource(s) ? (
+                                <span className="clip-range mono">
+                                  <span className="badge-image">画像</span>
+                                  <span className="clip-len">{formatSec(c.outSec - c.inSec)}</span>
+                                  <span className="clip-motion">{IMAGE_MOTION_LABEL[c.imageMotion ?? DEFAULT_IMAGE_MOTION]}</span>
                                 </span>
-                              </span>
+                              ) : (
+                                <span className="clip-range mono">
+                                  {formatTime(c.inSec)} – {formatTime(c.outSec)}
+                                  <span className="clip-len">{formatSec(c.outSec - c.inSec)}</span>
+                                  <span className="clip-vol" title="ゲーム音">
+                                    ♪{Math.round(c.gameVolume * 100)}
+                                  </span>
+                                </span>
+                              )}
                             </button>
                             {g.item ? (
                               <select

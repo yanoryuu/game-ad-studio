@@ -2,6 +2,7 @@ import type React from "react";
 import type { Format, Lang, Project, TemplateId, VerticalMode } from "@gas/shared";
 import type { NarrationPlan } from "../common/narrationLayout";
 import type { SeEvent } from "../common/SeTrack";
+import type { CaptionBox, CaptionVariant } from "../common/Captions";
 
 /**
  * Template module contract (docs/ARCHITECTURE.md §5.4). Every template lives in templates/<name>/ and
@@ -58,7 +59,18 @@ export type TemplateTimeline = {
    * `verticalMode` replaces style.vertical.mode for caption placement in 9:16 (e.g. "blur" = the band below a
    * centered 16:9 strip, whatever the project's mode).
    */
-  captionLayout?: { scale?: number; verticalMode?: VerticalMode };
+  captionLayout?: {
+    scale?: number;
+    verticalMode?: VerticalMode;
+    /** v5: "outline" (default: outlined `style.primaryColor`) | "plain-dark" (black, no outline/shadow/pop; for white backgrounds) */
+    variant?: CaptionVariant;
+    /** v5: caption font family (default BODY_FONT; the template must load the font itself) */
+    fontFamily?: string;
+    /** v5: explicit caption box for 9:16, px of the 1080×1920 frame (overrides position / verticalMode; see common/Captions) */
+    box916?: CaptionBox;
+    /** v5: explicit caption box for 16:9, px of the 1920×1080 frame */
+    box169?: CaptionBox;
+  };
 };
 
 export type TemplateRenderProps<T extends TemplateTimeline = TemplateTimeline> = {

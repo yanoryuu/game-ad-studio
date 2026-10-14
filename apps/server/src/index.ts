@@ -11,7 +11,11 @@ import {
   migrateProject,
   renderRequestSchema,
   type HealthResponse,
+  type Project,
   type AddSourceResponse,
+  type UploadSourceResponse,
+  IMAGE_EXTS,
+  VIDEO_EXTS,
   type RenderStartResponse,
   type UploadAssetResponse,
 } from "@gas/shared";
@@ -22,10 +26,11 @@ import { LISTEN_PORT, PROJECTS_DIR, projectDir } from "./paths";
 import { enqueueRender, getJob } from "./render";
 import { registerAnalysisRoutes } from "./routes/analysis";
 import { registerBgmRoutes } from "./routes/bgm";
+import { initBgmLibrary, registerBgmLibraryRoutes } from "./routes/bgmLibrary";
 import { registerRenderRoutes } from "./routes/renders";
 import { initSeLibrary, registerSeRoutes } from "./routes/se";
 import { registerTtsRoutes } from "./routes/tts";
-import { recoverInterruptedJobs, registerSource } from "./sources";
+import { mediaDir, recoverInterruptedJobs, registerSource, removeSourceMedia } from "./sources";
 import {
   assertSafeId,
   createProject,
@@ -78,12 +83,17 @@ app.put("/api/projects/:id", async (req, res) => {
   } catch (e) {
     throw badRequest(`Invalid project: ${e instanceof z.ZodError ? z.prettifyError(e) : (e as Error).message}`);
   }
+  let removed: Project["sources"] = [];
   const saved = await withProjectLock(id, async () => {
     const existing = await readProject(id); // 404 if missing
     // id (URL) and createdAt (stored) win; updatedAt is stamped by writeProject.
     // Server-owned fields (source status, candidates, fresh TTS results) are merged from the stored copy.
-    return writeProject(mergeServerOwned(existing, { ...body, id, createdAt: existing.createdAt }));
+    const out = await writeProject(mergeServerOwned(existing, { ...body, id, createdAt: existing.createdAt }));
+    removed = existing.sources.filter((s) => !out.sources.some((x) => x.id === s.id));
+    return out;
   });
+  // Sources removed by this PUT: delete their files in projects/<id>/media (uploads, image still videos).
+  void removeSourceMedia(id, removed).catch(() => {});
   res.json(saved);
 });
 
@@ -97,6 +107,52 @@ app.post("/api/projects/:id/sources", async (req, res) => {
   const project: AddSourceResponse = await registerSource(id, rawPath);
   res.status(201).json(project);
 });
+
+/** Upload a video / image as a source: saved into projects/<id>/media/, then registered like POST /sources. */
+const SOURCE_UPLOAD_EXTS = new Set<string>([...VIDEO_EXTS, ...IMAGE_EXTS]);
+const sourceUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, _file, cb) => {
+      const dir = mediaDir(String(req.params.id));
+      fsp.mkdir(dir, { recursive: true }).then(
+        () => cb(null, dir),
+        (e: Error) => cb(e, dir),
+      );
+    },
+    filename: (_req, file, cb) => cb(null, `${nanoid(10)}${path.extname(file.originalname).toLowerCase()}`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 * 1024, files: 1 },
+  defParamCharset: "utf8", // browsers send UTF-8 file names (Japanese)
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (SOURCE_UPLOAD_EXTS.has(ext)) cb(null, true);
+    else cb(badRequest(`Unsupported source file type "${ext || file.originalname}". Allowed: ${[...SOURCE_UPLOAD_EXTS].join(", ")}`));
+  },
+});
+
+app.post(
+  "/api/projects/:id/sources/upload",
+  async (req, _res, next) => {
+    const id = assertSafeId(String(req.params.id));
+    if (!(await projectExists(id))) throw notFound(`Project not found: ${id}`);
+    next();
+  },
+  sourceUpload.single("file"),
+  async (req, res) => {
+    if (!req.file) throw badRequest('Missing multipart file field "file"');
+    const id = String(req.params.id);
+    const saved = path.resolve(req.file.path);
+    let project: UploadSourceResponse;
+    try {
+      project = await registerSource(id, saved, { name: path.basename(req.file.originalname) });
+    } catch (e) {
+      await fsp.rm(saved, { force: true }).catch(() => {});
+      throw e;
+    }
+    console.log(`[sources] ${id}: uploaded "${req.file.originalname}" (${(req.file.size / 1048576).toFixed(1)} MB) -> media/${req.file.filename}`);
+    res.status(201).json(project);
+  },
+);
 
 app.get("/api/projects/:id/sources/:sourceId/original", async (req, res, next) => {
   const project = await readProject(assertSafeId(req.params.id));
@@ -177,6 +233,7 @@ registerTtsRoutes(app);
 registerBgmRoutes(app);
 registerRenderRoutes(app);
 registerSeRoutes(app);
+registerBgmLibraryRoutes(app);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -185,6 +242,8 @@ await fsp.mkdir(PROJECTS_DIR, { recursive: true });
 await recoverInterruptedJobs();
 // v4: SE library placeholders + se.json (background; the library works without them)
 void initSeLibrary().catch((e) => console.warn(`[se] init failed: ${(e as Error).message}`));
+// BGM library dir + bgm.json (§6.14)
+void initBgmLibrary();
 const server = app.listen(LISTEN_PORT, () => {
   console.log(`[server] listening on http://localhost:${LISTEN_PORT} (projects: ${PROJECTS_DIR})`);
 });

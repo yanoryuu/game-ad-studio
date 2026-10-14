@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { IMAGE_EXTS } from "@gas/shared";
 
 /* ------------------------------------------------------------------ */
 /* Process helpers (spawn, no shell, argument arrays)                  */
@@ -98,7 +99,7 @@ export async function probe(file: string): Promise<ProbeResult> {
   const video = streams.find((s) => s.codec_type === "video" && !s.disposition?.attached_pic);
   if (!video || !video.width || !video.height) throw new Error("No video stream found in file");
   const formatName = json.format?.format_name ?? "";
-  if (/image2|_pipe$/.test(formatName)) throw new Error(`Still images are not supported as sources (format: ${formatName})`);
+  if (/image2|_pipe$/.test(formatName)) throw new Error(`Still images must use an image extension (${IMAGE_EXTS.join(" ")}) to be registered (format: ${formatName})`);
   const audio = streams.find((s) => s.codec_type === "audio");
   // avg_frame_rate is more meaningful for VFR game captures; fall back to r_frame_rate
   const fps = Math.round((parseRate(video.avg_frame_rate) || parseRate(video.r_frame_rate) || 30) * 1000) / 1000;
@@ -113,6 +114,86 @@ export async function probe(file: string): Promise<ProbeResult> {
     videoStreamIndex: video.index,
     ...(audio ? { audioStreamIndex: audio.index } : {}),
   };
+}
+
+/** Verifies that `file` is a readable still image; returns its size. */
+export async function probeImage(file: string): Promise<{ width: number; height: number }> {
+  const r = await runOrThrow(
+    "ffprobe",
+    ["-v", "error", "-print_format", "json", "-show_streams", "-show_format", file],
+    "ffprobe",
+  );
+  const json = JSON.parse(r.stdout) as { streams?: FfprobeStream[]; format?: { format_name?: string } };
+  const video = (json.streams ?? []).find((s) => s.codec_type === "video");
+  if (!video || !video.width || !video.height) throw new Error("No image found in file");
+  const formatName = json.format?.format_name ?? "";
+  if (!/image2|_pipe$/.test(formatName)) throw new Error(`Not a still image (format: ${formatName})`);
+  return { width: video.width, height: video.height };
+}
+
+/* ------------------------------------------------------------------ */
+/* Native image source: preview still + thumbnail                       */
+/* ------------------------------------------------------------------ */
+
+/** Longest side of an image source's preview still (proxies/<id>.webp). */
+export const IMAGE_PROXY_MAX_PX = 1280;
+
+/**
+ * Preview still of an image source: WebP (alpha kept), longest side <= IMAGE_PROXY_MAX_PX (never upscaled).
+ * Rendering always uses the full-resolution image; this only keeps the browser preview light.
+ */
+export async function makeImageProxy(input: string, output: string): Promise<void> {
+  const m = IMAGE_PROXY_MAX_PX;
+  await runOrThrow(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-nostdin",
+      "-y",
+      "-i",
+      input,
+      "-frames:v",
+      "1",
+      "-vf",
+      `scale='min(${m},iw)':'min(${m},ih)':force_original_aspect_ratio=decrease:flags=lanczos,format=rgba`,
+      "-c:v",
+      "libwebp",
+      "-quality",
+      "90",
+      "-map_metadata",
+      "-1",
+      output,
+    ],
+    "Image preview generation",
+  );
+}
+
+/** 360 px high jpg thumbnail of an image source (transparent areas become dark gray). */
+export async function makeImageThumb(input: string, output: string): Promise<void> {
+  await runOrThrow(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-nostdin",
+      "-y",
+      "-i",
+      input,
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=0x22252c:s=16x16",
+      "-filter_complex",
+      "[0:v]scale=-2:360:flags=lanczos,format=rgba[fg];[1:v][fg]scale2ref[bg][fg2];[bg][fg2]overlay=format=auto,format=yuvj420p[v]",
+      "-map",
+      "[v]",
+      "-frames:v",
+      "1",
+      "-q:v",
+      "3",
+      output,
+    ],
+    "Thumbnail generation",
+  );
 }
 
 /* ------------------------------------------------------------------ */

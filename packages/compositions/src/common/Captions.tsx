@@ -55,6 +55,22 @@ export function buildCaptionItems(project: Project, lang: Lang, plan: NarrationP
   return items;
 }
 
+/** v5: caption look (Captions `variant`) */
+export type CaptionVariant = "outline" | "plain-dark";
+/** v5: explicit caption box (reference px, see Captions `box`) */
+export type CaptionBox = { top?: number; bottom?: number; left?: number; right?: number };
+const PLAIN_DARK_COLOR = "#0b0b0b";
+
+/** true if a "#rgb"/"#rrggbb" color is light (needs an outline on white) */
+function isLightColor(color: string): boolean {
+  const m = color.trim().match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!m) return false;
+  let h = m[1]!;
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const v = parseInt(h, 16);
+  return (0.299 * ((v >> 16) & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255 > 0.6;
+}
+
 /** Active caption at `frame`: when several overlap, the one that started last wins. */
 function activeAt(items: CaptionItem[], frame: number): CaptionItem | null {
   let best: CaptionItem | null = null;
@@ -89,7 +105,22 @@ export const Captions: React.FC<{
   emphasisColor?: string;
   /** v4: base font size multiplier (default 1) */
   scale?: number;
-}> = ({ items, lang, format, verticalMode = "blur", color, position, size, emphasisColor = "#FFE14D", scale = 1 }) => {
+  /**
+   * v5: "outline" (default) = `color` with a thick black outline + shadow and a pop-in; "plain-dark" = near-black
+   * text, no dark outline / drop shadow / pop (for white backgrounds, e.g. template trivia; only a WHITE halo, invisible
+   * on white, keeps it readable over footage or the end card). 【emphasis】 keeps `emphasisColor` (a light emphasis
+   * color gets a thin dark outline so it stays readable on white).
+   */
+  variant?: CaptionVariant;
+  /** v5: font family override (default BODY_FONT) */
+  fontFamily?: string;
+  /**
+   * v5: explicit caption box in reference px (1 = 1px of a 1080p short side, i.e. px of the 1080×1920 / 1920×1080
+   * frame), already resolved for this format. Overrides position / verticalMode. top + bottom: centered in the band;
+   * only top: hangs from `top`; only bottom: sits on `bottom`. left / right narrow the box (and the max width).
+   */
+  box?: CaptionBox;
+}> = ({ items, lang, format, verticalMode = "blur", color, position, size, emphasisColor = "#FFE14D", scale = 1, variant = "outline", fontFamily, box: area }) => {
   const frame = useCurrentFrame();
   const { fps, width, height } = useVideoConfig();
   const active = activeAt(items, frame);
@@ -102,7 +133,9 @@ export const Captions: React.FC<{
   const opacity = interpolate(local, [0, 2], [0, 1], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
 
   const base = (vertical ? (size === "l" ? 84 : 68) : size === "l" ? 74 : 58) * u * scale;
-  const maxWidth = width * (vertical ? 0.9 : 0.8);
+  const plain = variant === "plain-dark";
+  const areaWidth = area && (area.left !== undefined || area.right !== undefined) ? width - ((area.left ?? 0) + (area.right ?? 0)) * u : null;
+  const maxWidth = areaWidth !== null ? Math.min(width * (vertical ? 0.9 : 0.8), areaWidth * 0.96) : width * (vertical ? 0.9 : 0.8);
   // shrink long captions so they stay within ~2 lines
   const em = estimateRichEm(active.text);
   // ...and so the widest unbreakable phrase/word still fits on one line (it would overflow the frame otherwise)
@@ -111,7 +144,19 @@ export const Captions: React.FC<{
   const stroke = Math.max(3, fontSize * 0.11);
 
   let box: React.CSSProperties;
-  if (position === "center") {
+  if (area) {
+    const justifyContent = area.top !== undefined && area.bottom !== undefined ? "center" : area.top !== undefined ? "flex-start" : "flex-end";
+    box = {
+      top: area.top !== undefined ? area.top * u : 0,
+      bottom: area.bottom !== undefined ? area.bottom * u : 0,
+      left: (area.left ?? 0) * u,
+      right: (area.right ?? 0) * u,
+      width: "auto",
+      height: "auto",
+      justifyContent,
+      alignItems: "center",
+    };
+  } else if (position === "center") {
     box = { justifyContent: "center", alignItems: "center" };
   } else if (vertical && verticalMode === "crop") {
     box = { justifyContent: "flex-end", alignItems: "center", paddingBottom: height * 0.16 };
@@ -131,22 +176,27 @@ export const Captions: React.FC<{
         style={{
           maxWidth,
           textAlign: "center",
-          fontFamily: BODY_FONT,
+          fontFamily: fontFamily ?? BODY_FONT,
           fontWeight: 900,
           fontSize,
           lineHeight: 1.28,
           letterSpacing: lang === "ja" ? "0.02em" : "0.01em",
-          color,
-          textShadow: `${outline(stroke, "#000")}, 0 ${stroke * 1.2}px ${stroke * 3}px rgba(0,0,0,0.75)`,
-          transform: `translateY(${interpolate(pop, [0, 1], [14 * u, 0])}px) scale(${interpolate(pop, [0, 1], [0.82, 1])})`,
-          opacity,
+          color: plain ? PLAIN_DARK_COLOR : color,
+          textShadow: plain ? outline(stroke * 0.8, "#ffffff") : `${outline(stroke, "#000")}, 0 ${stroke * 1.2}px ${stroke * 3}px rgba(0,0,0,0.75)`,
+          transform: plain ? undefined : `translateY(${interpolate(pop, [0, 1], [14 * u, 0])}px) scale(${interpolate(pop, [0, 1], [0.82, 1])})`,
+          opacity: plain ? 1 : opacity,
           wordBreak: lang === "ja" ? "keep-all" : "normal",
           overflowWrap: "anywhere",
           lineBreak: "strict",
           textWrap: "balance",
         }}
       >
-        <RichText text={active.text} lang={lang} emphasisColor={emphasisColor} />
+        <RichText
+          text={active.text}
+          lang={lang}
+          emphasisColor={emphasisColor}
+          emphasisStyle={plain && isLightColor(emphasisColor) ? { textShadow: outline(Math.max(2, fontSize * 0.04), PLAIN_DARK_COLOR) } : undefined}
+        />
       </div>
     </AbsoluteFill>
   );

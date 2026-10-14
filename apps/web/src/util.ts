@@ -11,6 +11,11 @@ export function formatSec(sec: number): string {
   return `${(Math.round(sec * 10) / 10).toFixed(1)}s`;
 }
 
+/** Display name of a source: its original file name (uploads / images), else the file name of originalPath. */
+export function sourceName(s: { name?: string; originalPath: string }): string {
+  return s.name || basename(s.originalPath);
+}
+
 export function basename(p: string): string {
   const parts = p.split(/[\\/]/);
   return parts[parts.length - 1] || p;

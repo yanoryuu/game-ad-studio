@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
-import type { Clip, ClipSlot, Project, Source } from "@gas/shared";
+import { isStillImageSource, type Clip, type ClipSlot, type Project, type Source } from "@gas/shared";
 import { sourceUrl } from "@gas/compositions";
-import { basename, clamp, cx, formatSec, formatTime, round2 } from "../util";
+import { sourceName, clamp, cx, formatSec, formatTime, round2 } from "../util";
+import { ImageClipEditor } from "./ImageClipEditor";
 import { Icon, Segmented } from "./ui";
 
-export type ClipDraft = Pick<Clip, "inSec" | "outSec" | "slot" | "gameVolume" | "focusX">;
+export type ClipDraft = Pick<Clip, "inSec" | "outSec" | "slot" | "gameVolume" | "focusX" | "imageMotion">;
 
 /**
  * External request to preview a range (e.g. hovering a highlight candidate).
@@ -18,7 +19,7 @@ const MIN_LEN = 0.2;
 const DEFAULT_LEN = 3;
 const STEP = 1 / 30;
 
-export function ClipMarker(props: {
+type ClipMarkerProps = {
   project: Project;
   source: Source;
   editingClip: Clip | null;
@@ -35,7 +36,18 @@ export function ClipMarker(props: {
   /** the preview currently shows 9:16 */
   previewVertical?: boolean;
   onShowVertical?: () => void;
-}) {
+};
+
+/**
+ * Clip editor of a source: IN/OUT marking on the proxy video, or — for a native image source
+ * (isStillImageSource) — ImageClipEditor (length + motion; cue / marks do not apply).
+ */
+export function ClipMarker(props: ClipMarkerProps) {
+  if (isStillImageSource(props.source)) return <ImageClipEditor {...props} />;
+  return <VideoClipMarker {...props} />;
+}
+
+function VideoClipMarker(props: ClipMarkerProps) {
   const { project, source, editingClip } = props;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [duration, setDuration] = useState(source.durationSec);
@@ -240,7 +252,7 @@ export function ClipMarker(props: {
           <>
             <Icon.Scissors />
             <span className="marker-title" title={source.originalPath}>
-              {basename(source.originalPath)}
+              {sourceName(source)}
             </span>
           </>
         )}
@@ -475,7 +487,7 @@ function focusLabel(x: number): string {
  * Draggable 9:16 crop frame over the 16:9 marker video (ARCHITECTURE §5.7: object-position focusX*100% 50%).
  * The box matches the displayed video content (object-fit: contain), the frame width = 9:16 of its height.
  */
-function CropFrame(props: { aspect: number; focusX: number; onChange: (x: number) => void }) {
+export function CropFrame(props: { aspect: number; focusX: number; onChange: (x: number) => void }) {
   const boxRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ x: number; f: number } | null>(null);
   const a = Number.isFinite(props.aspect) && props.aspect > 0 ? props.aspect : 16 / 9;

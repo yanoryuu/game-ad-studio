@@ -5,6 +5,8 @@ import {
   DEFAULT_VOICES,
   PROJECT_SCHEMA_VERSION,
   createDefaultIntroData,
+  createDefaultShortFormData,
+  SHORT_TEMPLATE_IDS,
   createDefaultTemplateData,
   langSchema,
   projectSchema,
@@ -41,6 +43,9 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
  *    templates (SE_TEMPLATES = ["intro"]) play them, so existing templates sound exactly as before.
  *  - style.emphasisColor: added "#FFE14D"
  *  - 【】 in existing texts become emphasis markup (no conversion; such brackets were rare before)
+ *
+ * v4 -> v5 (10 short-form templates):
+ *  - templateData.shorts: added; every missing template entry gets createDefaultShortFormData(id)
  */
 export function migrateProject(raw: unknown): Project {
   if (!isObj(raw)) throw new Error("project.json is not an object");
@@ -52,7 +57,18 @@ export function migrateProject(raw: unknown): Project {
   if (version < 2) p = v1ToV2(p);
   if (version < 3) p = v2ToV3(p);
   if (version < 4) p = v3ToV4(p);
+  if (version < 5) p = v4ToV5(p);
   return projectSchema.parse(p);
+}
+
+function v4ToV5(p: Obj): Obj {
+  const out: Obj = { ...p, schemaVersion: 5 };
+  const td: Obj = isObj(p.templateData) ? { ...p.templateData } : {};
+  const shorts: Obj = isObj(td.shorts) ? { ...td.shorts } : {};
+  for (const id of SHORT_TEMPLATE_IDS) if (!isObj(shorts[id])) shorts[id] = createDefaultShortFormData(id);
+  td.shorts = shorts;
+  out.templateData = td;
+  return out;
 }
 
 function v3ToV4(p: Obj): Obj {

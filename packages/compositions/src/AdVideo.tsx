@@ -63,6 +63,9 @@ export const AdVideo: React.FC<AdVideoProps> = ({ project, format, lang, assetBa
           size={cs.size}
           emphasisColor={project.style.emphasisColor}
           scale={tl.captionLayout?.scale ?? 1}
+          variant={tl.captionLayout?.variant}
+          fontFamily={tl.captionLayout?.fontFamily}
+          box={format === "9:16" ? tl.captionLayout?.box916 : tl.captionLayout?.box169}
         />
       ) : null}
       <Narration project={project} plan={tl.narration} assetBaseUrl={assetBaseUrl} />

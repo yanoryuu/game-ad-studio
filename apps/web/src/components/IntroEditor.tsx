@@ -28,7 +28,7 @@ const LANG_NAME: Record<Lang, string> = { ja: "日本語", en: "English" };
  * Shown under the template list when 紹介動画風 is selected: one click to the recommended preview/output setup
  * (9:16 preview + 9:16 in the export formats, length 自由 = follows the narration).
  */
-export function IntroFormatHint(props: { project: Project; update: UpdateProject; format: Format; setFormat: (f: Format) => void }) {
+export function IntroFormatHint(props: { project: Project; update: UpdateProject; format: Format; setFormat: (f: Format) => void; name?: string }) {
   const { project } = props;
   const ok = props.format === "9:16" && project.durationSec === null && project.formats.includes("9:16");
   if (ok) {
@@ -49,7 +49,7 @@ export function IntroFormatHint(props: { project: Project; update: UpdateProject
   return (
     <div className="intro-fmt" role="status">
       <span>
-        紹介動画風は Shorts / TikTok 向けの縦型です。<b>9:16</b> でプレビューし、尺は<b>「自由」</b>(ナレーションの長さに合わせる)がおすすめです。
+        {props.name ?? "紹介動画風"}は Shorts / TikTok 向けの縦型です。<b>9:16</b> でプレビューし、尺は<b>「自由」</b>(ナレーションの長さに合わせる)がおすすめです。
         {project.durationSec !== null ? `(現在 ${project.durationSec} 秒固定)` : ""}
       </span>
       <button className="btn btn-sm btn-primary" onClick={apply}>

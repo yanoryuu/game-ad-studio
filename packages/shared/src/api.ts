@@ -49,6 +49,24 @@ export const addSourceRequestSchema = z.object({
 });
 export type AddSourceRequest = z.infer<typeof addSourceRequestSchema>;
 
+/** Video file extensions accepted as sources (path registration and upload). */
+export const VIDEO_EXTS = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"] as const;
+/**
+ * Still image extensions accepted as sources (source.kind "image", used as an image without any video
+ * conversion; see isStillImageSource / IMAGE_MAX_CLIP_SEC).
+ */
+export const IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp"] as const;
+/** @deprecated length of the still mp4 the server USED to generate from an image (legacy image sources only). */
+export const IMAGE_SOURCE_SEC = 8;
+
+/**
+ * POST /api/projects/:id/sources/upload (multipart, field "file", ONE file per request, ≤ 20 GB,
+ * VIDEO_EXTS + IMAGE_EXTS) -> 201 Project, exactly like POST /sources.
+ * The file is saved as `projects/<id>/media/<nanoid><ext>` and then registered from that path;
+ * on a registration error the uploaded file is deleted. 400 for other extensions, 413 when too large.
+ */
+export type UploadSourceResponse = Project;
+
 /** POST /api/projects/:id/assets (multipart, field "file") -> UploadAssetResponse */
 export const uploadAssetResponseSchema = z.object({
   /** project-relative asset ref, e.g. "assets/k3j2h4.png" */
@@ -97,7 +115,7 @@ export type RenderJob = z.infer<typeof renderJobSchema>;
 /**
  * POST /api/projects/:id/sources/:sourceId/analyze  (no body)
  * -> 202 Project (source.analysisStatus = "running"); poll GET /api/projects/:id.
- * 409 if the source is already being analyzed or its proxy is not ready.
+ * 409 if the source is already being analyzed, its proxy is not ready, or it is an image source (kind "image").
  */
 export type AnalyzeStartResponse = Project;
 
@@ -287,6 +305,13 @@ export const seListResponseSchema = z.object({
 export type SeListResponse = z.infer<typeof seListResponseSchema>;
 
 /**
+ * POST /api/se/upload (multipart, field "file", SE_EXTS only, ≤ 50 MB) -> SeListResponse.
+ * The file is copied into the library dir ROOT under its original (sanitized) name; an existing name gets
+ * " (2)", " (3)", … before the extension. The new id is the stored file name.
+ */
+export const SE_UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
  * PUT /api/se/manifest -> SeListResponse. MERGES credits into se.json: id -> credit text; "" removes the credit.
  * Ids are not required to exist (but must be valid ids).
  */
@@ -294,3 +319,122 @@ export const seManifestUpdateRequestSchema = z.object({
   credits: z.record(seFileIdSchema, z.string().max(200)),
 });
 export type SeManifestUpdateRequest = z.infer<typeof seManifestUpdateRequestSchema>;
+
+/* ------------------------------------------------------------------ */
+/* BGM library (ARCHITECTURE §6.14)                                     */
+/* ------------------------------------------------------------------ */
+
+/** File extensions the BGM library lists / serves / accepts for upload. */
+export const BGM_EXTS = [".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"] as const;
+
+/** Mood tags of library tracks (fixed list; id is stored in bgm.json, label is the UI text). */
+export const BGM_MOODS = [
+  { id: "pop", label: "ポップ" },
+  { id: "upbeat", label: "アップテンポ" },
+  { id: "comedy", label: "コミカル・ゆるい" },
+  { id: "cute", label: "かわいい" },
+  { id: "chiptune", label: "チップチューン" },
+  { id: "edm", label: "EDM" },
+  { id: "epic", label: "壮大" },
+  { id: "rock", label: "ロック" },
+  { id: "chill", label: "落ち着き" },
+  { id: "dark", label: "ダーク・緊張" },
+  { id: "jingle", label: "ジングル" },
+] as const;
+export const bgmMoodSchema = z.enum(["pop", "upbeat", "comedy", "cute", "chiptune", "edm", "epic", "rock", "chill", "dark", "jingle"]);
+export type BgmMood = z.infer<typeof bgmMoodSchema>;
+
+/**
+ * Well-known free BGM sites (UI hints + the "credit required" warning). Matching is by `source`
+ * (case-insensitive, any of `names`). creditRequired = the site's terms require a credit in the video/description.
+ */
+export const BGM_SOURCES = [
+  { id: "opentracks", label: "OpenTracks(旧DOVA-SYNDROME)", names: ["OpenTracks", "DOVA-SYNDROME", "DOVA"], creditRequired: false, creditExample: "" },
+  { id: "peritune", label: "PeriTune", names: ["PeriTune"], creditRequired: false, creditExample: "" },
+  { id: "otologic", label: "OtoLogic", names: ["OtoLogic"], creditRequired: true, creditExample: "BGM by OtoLogic(CC BY 4.0)" },
+  { id: "maou", label: "魔王魂", names: ["魔王魂", "maou", "maoudamashii"], creditRequired: true, creditExample: "音楽：魔王魂" },
+] as const;
+export type BgmSourceInfo = (typeof BGM_SOURCES)[number];
+
+/** Known site for a `source` text (case-insensitive), or undefined. */
+export function bgmSourceInfo(source: string | undefined): BgmSourceInfo | undefined {
+  const s = source?.trim().toLowerCase();
+  if (!s) return undefined;
+  return BGM_SOURCES.find((x) => x.names.some((n) => n.toLowerCase() === s) || x.label.toLowerCase() === s);
+}
+
+/** One manifest entry (all optional). `tags` keeps unknown strings on read; the list response filters them. */
+export const bgmManifestEntrySchema = z.object({
+  credit: z.string().optional(),
+  source: z.string().optional(),
+  url: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  note: z.string().optional(),
+});
+export type BgmManifestEntry = z.infer<typeof bgmManifestEntrySchema>;
+
+/** Library manifest `<bgm.dir>/bgm.json` (server-owned file; edited via PUT /api/bgm/manifest). */
+export const bgmManifestSchema = z.object({
+  version: z.literal(1),
+  /** file id (library-relative path) -> metadata. Entries for missing files are kept (harmless). */
+  files: z.record(z.string(), bgmManifestEntrySchema),
+});
+export type BgmManifest = z.infer<typeof bgmManifestSchema>;
+
+/** One track of the BGM library. */
+export const bgmFileSchema = z.object({
+  /** library-relative path with "/" (same id rules as SE: seFileIdSchema) */
+  id: seFileIdSchema,
+  /** file name for display */
+  name: z.string(),
+  /** length in seconds (ffprobe, cached by size+mtime; 0 if unknown) */
+  durationSec: z.number().nonnegative(),
+  credit: z.string().optional(),
+  source: z.string().optional(),
+  url: z.string().optional(),
+  /** known mood tags only, in BGM_MOODS order */
+  tags: z.array(bgmMoodSchema),
+  note: z.string().optional(),
+});
+export type BgmFile = z.infer<typeof bgmFileSchema>;
+
+/** GET /api/bgm, POST /api/bgm/rescan, PUT /api/bgm/manifest, POST /api/bgm/upload -> BgmListResponse. */
+export const bgmListResponseSchema = z.object({
+  /** absolute library dir (config bgm.dir, default D:\Tools\bgm) */
+  dir: z.string(),
+  /** false when the dir does not exist (files = []) */
+  exists: z.boolean(),
+  files: z.array(bgmFileSchema),
+});
+export type BgmListResponse = z.infer<typeof bgmListResponseSchema>;
+
+/** POST /api/bgm/upload (multipart "file", BGM_EXTS, ≤ 100 MB) -> BgmListResponse (copied to the library root). */
+export const BGM_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
+/**
+ * PUT /api/bgm/manifest -> BgmListResponse. MERGES per id and per field: a present field replaces the stored one,
+ * "" (or [] for tags) removes it, an absent field is unchanged. Ids must be valid (not required to exist).
+ */
+export const bgmManifestUpdateRequestSchema = z.object({
+  files: z.record(
+    seFileIdSchema,
+    z.object({
+      credit: z.string().max(200).optional(),
+      source: z.string().max(100).optional(),
+      url: z.string().max(500).optional(),
+      tags: z.array(bgmMoodSchema).max(20).optional(),
+      note: z.string().max(500).optional(),
+    }),
+  ),
+});
+export type BgmManifestUpdateRequest = z.infer<typeof bgmManifestUpdateRequestSchema>;
+
+/**
+ * POST /api/projects/:id/bgm/from-library { id } -> Project (200). Copies the library file into the project's
+ * assets/<nanoid><ext>, sets audio.bgm (mix settings kept from the previous BGM, else DEFAULT_BGM), records
+ * audio.bgm.library (id + credit/source/url snapshot) and starts beat analysis (analysisStatus "running").
+ * 404: project / library file missing.
+ */
+export const bgmFromLibraryRequestSchema = z.object({ id: seFileIdSchema });
+export type BgmFromLibraryRequest = z.infer<typeof bgmFromLibraryRequestSchema>;
+export type BgmFromLibraryResponse = Project;

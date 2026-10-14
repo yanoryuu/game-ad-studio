@@ -23,6 +23,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".m4a": "audio/mp4",
   ".ogg": "audio/ogg",
   ".aac": "audio/aac",
+  ".flac": "audio/flac",
   ".json": "application/json; charset=utf-8",
 };
 
