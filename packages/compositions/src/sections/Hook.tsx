@@ -111,7 +111,7 @@ export const HookSection: React.FC<{
   return (
     <AbsoluteFill style={{ backgroundColor: "black" }}>
       {hasFootage ? (
-        <ClipTrack project={project} clips={section.clips} format={format} assetBaseUrl={assetBaseUrl} useProxy={useProxy} punchFirst={false} />
+        <ClipTrack project={project} clips={section.clips} format={format} assetBaseUrl={assetBaseUrl} useProxy={useProxy} sectionFrom={section.from} punchFirst={false} />
       ) : (
         <Backdrop project={project} assetBaseUrl={assetBaseUrl} blurPx={6} brightness={0.6} />
       )}

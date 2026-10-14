@@ -140,14 +140,22 @@ export function Inspector(props: {
         <Field label="タイトル" htmlFor="g-title">
           <input id="g-title" className="input" value={project.game.title} onChange={(e) => setGame({ title: e.target.value })} />
         </Field>
-        <Field label="発売情報" htmlFor="g-release">
-          <input
-            id="g-release"
-            className="input"
-            placeholder="2026年冬 発売予定 / Coming Winter 2026"
-            value={project.game.releaseText}
-            onChange={(e) => setGame({ releaseText: e.target.value })}
-          />
+        <Field label="発売情報" hint="言語ごとにエンドカードへ表示(空欄なら非表示)" htmlFor="g-release-ja">
+          <div className="lang-inputs">
+            {(["ja", "en"] as const).map((lg) => (
+              <label key={lg} className={cx("lang-input", lg === lang && "is-current")}>
+                <span className="lang-tag mono">{lg.toUpperCase()}</span>
+                <input
+                  id={`g-release-${lg}`}
+                  className="input"
+                  placeholder={lg === "ja" ? "2026年冬 発売予定" : "Coming Winter 2026"}
+                  lang={lg}
+                  value={project.game.releaseText[lg]}
+                  onChange={(e) => setGame({ releaseText: { ...project.game.releaseText, [lg]: e.target.value } })}
+                />
+              </label>
+            ))}
+          </div>
         </Field>
         <Field label="Steam URL" htmlFor="g-steam">
           <input

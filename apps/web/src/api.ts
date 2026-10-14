@@ -9,6 +9,11 @@ import type {
   RenderJob,
   RenderRequest,
   RenderStartResponse,
+  TtsEngine,
+  TtsPreviewRequest,
+  TtsStatusResponse,
+  TtsSynthesizeRequest,
+  TtsVoice,
   UploadAssetResponse,
 } from "@gas/shared";
 
@@ -80,7 +85,56 @@ export const api = {
   startRender: (id: string, body: RenderRequest) =>
     request<RenderStartResponse>("POST", `/api/projects/${encodeURIComponent(id)}/render`, body),
   getRenderJob: (jobId: string) => request<RenderJob>("GET", `/api/render/${encodeURIComponent(jobId)}`),
+
+  /* ---- Phase 2 ---- */
+  /** 202 Project (analysisStatus "running"); 409 when busy / proxy not ready. */
+  analyzeSource: (id: string, sourceId: string) =>
+    request<Project>(
+      "POST",
+      `/api/projects/${encodeURIComponent(id)}/sources/${encodeURIComponent(sourceId)}/analyze`,
+    ),
+  ttsStatus: (signal?: AbortSignal) => request<TtsStatusResponse>("GET", "/api/tts/status", undefined, { signal }),
+  ttsVoices: (engine: TtsEngine) => request<TtsVoice[]>("GET", `/api/tts/voices?engine=${engine}`),
+  /** Synchronous; returns the updated Project. */
+  synthesize: (id: string, body: TtsSynthesizeRequest) =>
+    request<Project>("POST", `/api/projects/${encodeURIComponent(id)}/tts`, body),
+  /** Returns audio/wav. Nothing is saved on the server. */
+  ttsPreview: async (body: TtsPreviewRequest): Promise<Blob> => {
+    let res: Response;
+    try {
+      res = await fetch("/api/tts/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      throw new ApiError(0, "サーバーに接続できません");
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      let msg = text || res.status < 500 ? `HTTP ${res.status}` : "サーバーに接続できません";
+      try {
+        const data = JSON.parse(text) as unknown;
+        if (data && typeof data === "object" && "error" in data && typeof (data as { error: unknown }).error === "string") {
+          msg = (data as { error: string }).error;
+        }
+      } catch {
+        /* not JSON */
+      }
+      throw new ApiError(text || res.status < 500 ? res.status : 0, msg);
+    }
+    return res.blob();
+  },
 };
+
+/** Message for Phase 2 endpoints that may still be stubs (501) or whose engine is down (503). */
+export function featureErrorMessage(e: unknown, feature: string): string {
+  if (e instanceof ApiError) {
+    if (e.status === 501) return `${feature}はまだサーバーに実装されていません(501)`;
+    if (e.status === 0) return "サーバーに接続できません";
+  }
+  return errorMessage(e);
+}
 
 export function errorMessage(e: unknown): string {
   if (e instanceof ApiError) return e.message;

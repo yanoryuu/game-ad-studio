@@ -1,4 +1,5 @@
-import type { Clip, Project } from "@gas/shared";
+import type { Clip, Lang, Project } from "@gas/shared";
+import { layoutNarration, placeSection, type NarrationPlan } from "./narrationLayout";
 
 /**
  * Shared timeline of the "hook-play-cta" template.
@@ -8,6 +9,9 @@ import type { Clip, Project } from "@gas/shared";
 
 export const HOOK_SEC = 2.5;
 export const END_CARD_SEC = 3;
+/** Fixed durationSec: the hook / end card may grow up to this to fit their narration (main shrinks). */
+export const MAX_HOOK_SEC = 5;
+export const MAX_END_CARD_SEC = 5;
 /** Proportional trimming never makes a main clip shorter than this; overflow clips are dropped instead. */
 export const MIN_CLIP_SEC = 0.6;
 /** Clips shorter than this (after validation) are ignored. */
@@ -60,6 +64,8 @@ export type AdTimeline = {
   endCard: TimelineSection;
   /** true if the hook section re-uses the beginning of the main clips (no hook-slot clips) */
   hookBorrowedFromMain: boolean;
+  /** narration of the requested language placed on this timeline (ARCHITECTURE §5.1) */
+  narration: NarrationPlan;
 };
 
 function toSegments(project: Project, clips: Clip[], fps: number): Segment[] {
@@ -205,9 +211,20 @@ function fitSegments(segs: Segment[], target: number, minFrames: number, keyPref
   return placed;
 }
 
-export function buildTimeline(project: Project, fps: number): AdTimeline {
-  const hookFrames = Math.round(HOOK_SEC * fps);
-  const endFrames = Math.round(END_CARD_SEC * fps);
+/**
+ * @param lang narration language: with durationSec === null, sections grow so its narration fits.
+ *             With a fixed durationSec, hook / end card grow to fit their narration up to
+ *             MAX_HOOK_SEC / MAX_END_CARD_SEC (the main section absorbs the difference, total stays
+ *             exactly durationSec); narration that still overflows its section is cut (see NarrationPlan).
+ */
+export function buildTimeline(project: Project, fps: number, lang: Lang): AdTimeline {
+  const narr = layoutNarration(project, lang, fps);
+  const free = project.durationSec === null;
+  const grow = (base: number, need: number, max: number) =>
+    Math.max(Math.round(base * fps), free ? need : Math.min(need, Math.round(max * fps)));
+  // fixed durations are 15 / 30 s, so hook + end card (<= 10 s) always leave room for main
+  const hookFrames = grow(HOOK_SEC, narr.hookNeed, MAX_HOOK_SEC);
+  const endFrames = grow(END_CARD_SEC, narr.ctaNeed, MAX_END_CARD_SEC);
   const minFrames = Math.round(MIN_CLIP_SEC * fps);
 
   const hookSegs0 = toSegments(project, project.clips.filter((c) => c.slot === "hook"), fps);
@@ -224,7 +241,8 @@ export function buildTimeline(project: Project, fps: number): AdTimeline {
 
   let mainFrames: number;
   if (project.durationSec === null) {
-    mainFrames = mainSegs.reduce((a, s) => a + segLen(s), 0);
+    // free length: natural clip length, extended (extra source material / last-frame hold) to fit the narration
+    mainFrames = Math.max(mainSegs.reduce((a, s) => a + segLen(s), 0), narr.mainNeed);
   } else {
     mainFrames = Math.max(0, Math.round(project.durationSec * fps) - hookFrames - endFrames);
   }
@@ -236,6 +254,12 @@ export function buildTimeline(project: Project, fps: number): AdTimeline {
   const main: TimelineSection = { from: hookFrames, durationInFrames: mainFrames, clips: mainClips };
   const endCard: TimelineSection = { from: hookFrames + mainFrames, durationInFrames: endFrames, clips: [] };
 
+  const lines = [
+    ...placeSection(narr.hook, "hook", hook.from, hook.durationInFrames, !free),
+    ...placeSection(narr.main, "main", main.from, main.durationInFrames, !free),
+    ...placeSection(narr.cta, "cta", endCard.from, endCard.durationInFrames, !free),
+  ];
+
   return {
     fps,
     totalFrames: hookFrames + mainFrames + endFrames,
@@ -243,5 +267,6 @@ export function buildTimeline(project: Project, fps: number): AdTimeline {
     main,
     endCard,
     hookBorrowedFromMain,
+    narration: { lines, overflowLineIds: lines.filter((l) => l.cut).map((l) => l.lineId) },
   };
 }

@@ -76,6 +76,93 @@ export function Banner(props: { tone: "error" | "warn" | "info"; children: React
   );
 }
 
+export function Tabs<T extends string>(props: {
+  value: T;
+  options: { value: T; label: ReactNode; badge?: ReactNode; title?: string }[];
+  onChange: (v: T) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div className="tabs" role="tablist" aria-label={props.ariaLabel}>
+      {props.options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="tab"
+          aria-selected={o.value === props.value}
+          className={cx("tab", o.value === props.value && "is-active")}
+          title={o.title}
+          onClick={() => props.onChange(o.value)}
+        >
+          {o.label}
+          {o.badge != null && o.badge !== false ? <span className="tab-badge">{o.badge}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Switch(props: { checked: boolean; onChange: (v: boolean) => void; label: ReactNode; disabled?: boolean }) {
+  return (
+    <label className={cx("switch", props.disabled && "is-disabled")}>
+      <input
+        type="checkbox"
+        checked={props.checked}
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(e.target.checked)}
+      />
+      <span className="switch-track" aria-hidden>
+        <span className="switch-thumb" />
+      </span>
+      <span className="switch-label">{props.label}</span>
+    </label>
+  );
+}
+
+/** Labelled range slider with a formatted value readout. */
+export function Slider(props: {
+  label: ReactNode;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (v: number) => void;
+  format?: (v: number) => string;
+  disabled?: boolean;
+  hint?: ReactNode;
+  title?: string;
+}) {
+  return (
+    <div className={cx("slider", props.disabled && "is-disabled")} title={props.title}>
+      <div className="slider-head">
+        <span className="field-label">{props.label}</span>
+        <span className="mono slider-val">{props.format ? props.format(props.value) : props.value}</span>
+      </div>
+      <input
+        type="range"
+        min={props.min}
+        max={props.max}
+        step={props.step}
+        value={props.value}
+        disabled={props.disabled}
+        onChange={(e) => props.onChange(Number(e.target.value))}
+        aria-label={typeof props.label === "string" ? props.label : undefined}
+      />
+      {props.hint ? <div className="field-hint">{props.hint}</div> : null}
+    </div>
+  );
+}
+
+/** Thin horizontal 0..1 bar. */
+export function Meter(props: { value: number; tone?: "accent" | "scene" | "motion" | "loud"; title?: string }) {
+  const v = Math.max(0, Math.min(1, props.value));
+  return (
+    <span className={cx("meter", `meter-${props.tone ?? "accent"}`)} title={props.title}>
+      <span style={{ width: `${v * 100}%` }} />
+    </span>
+  );
+}
+
 /* --- icons (inline, stroke-based, 16px grid) --- */
 type IconProps = { size?: number };
 const svg = (path: ReactNode, size = 16) => (
@@ -139,4 +226,36 @@ export const Icon = {
       size,
     ),
   External: ({ size }: IconProps) => svg(<path d="M9 2.5h4.5V7M13.5 2.5L7 9M11.5 9.5v4h-9v-9h4" />, size),
+  Sparkle: ({ size }: IconProps) =>
+    svg(<path d="M8 1.8l1.5 4.2 4.3 1.5-4.3 1.5L8 13.2 6.5 9 2.2 7.5 6.5 6zM13 11.5v3M11.5 13h3" />, size),
+  Wand: ({ size }: IconProps) => svg(<path d="M2.5 13.5l8-8M9 4l3 3M12 1.8v2M13 2.8h-2M14 6.5v1.5M14.75 7.25h-1.5" />, size),
+  Mic: ({ size }: IconProps) =>
+    svg(
+      <>
+        <rect x="5.5" y="1.8" width="5" height="8" rx="2.5" />
+        <path d="M3.2 7.5a4.8 4.8 0 009.6 0M8 12.3v2" />
+      </>,
+      size,
+    ),
+  Music: ({ size }: IconProps) =>
+    svg(
+      <>
+        <path d="M6 12V3.2l7-1.4v8.7" />
+        <circle cx="4.3" cy="12" r="1.8" />
+        <circle cx="11.3" cy="10.5" r="1.8" />
+      </>,
+      size,
+    ),
+  Speaker: ({ size }: IconProps) => svg(<path d="M2.5 6v4h2.5l3.5 3V3L5 6zM11 5.5a3.5 3.5 0 010 5M12.8 3.5a6 6 0 010 9" />, size),
+  Stop: ({ size }: IconProps) => svg(<rect x="4" y="4" width="8" height="8" rx="1" fill="currentColor" />, size),
+  Refresh: ({ size }: IconProps) => svg(<path d="M13 3v3.5H9.5M3 13V9.5h3.5M12.6 6.5A5 5 0 004 5M3.4 9.5A5 5 0 0012 11" />, size),
+  Close: ({ size }: IconProps) => svg(<path d="M4 4l8 8M12 4l-8 8" />, size),
+  Caption: ({ size }: IconProps) =>
+    svg(
+      <>
+        <rect x="1.8" y="3" width="12.4" height="10" rx="1.5" />
+        <path d="M4.5 10h3M9.5 10h2M4.5 7.5h7" />
+      </>,
+      size,
+    ),
 };

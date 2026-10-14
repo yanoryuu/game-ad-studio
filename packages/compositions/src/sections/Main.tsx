@@ -8,25 +8,34 @@ import { assetUrl } from "../urls";
 import { BODY_FONT, displayFont } from "../fonts";
 import { outline, unitFor } from "../theme";
 
-/** Small logo / title watermark in the corner while gameplay plays. */
+/** Small logo / title watermark in the corner while gameplay plays (style.watermark: corner + scale, "none" hides it). */
 const CornerBadge: React.FC<{ project: Project; lang: Lang; assetBaseUrl: string }> = ({ project, lang, assetBaseUrl }) => {
   const frame = useCurrentFrame();
   const { width, height } = useVideoConfig();
+  const wm = project.style.watermark;
+  if (wm.position === "none") return null;
   const u = unitFor(width, height);
+  const k = Math.min(3, Math.max(0.25, wm.scale));
   const opacity = interpolate(frame, [4, 14], [0, 0.92], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
   const pad = 44 * u;
+  const top = wm.position.startsWith("top");
+  const left = wm.position.endsWith("left");
+  const place: React.CSSProperties = {
+    position: "absolute",
+    ...(top ? { top: pad } : { bottom: pad }),
+    ...(left ? { left: pad } : { right: pad }),
+  };
   const { logo, title } = project.game;
   if (logo) {
     return (
       <Img
         src={assetUrl(assetBaseUrl, project.id, logo)}
         style={{
-          position: "absolute",
-          top: pad,
-          left: pad,
-          maxWidth: 300 * u,
-          maxHeight: 110 * u,
+          ...place,
+          maxWidth: Math.min(300 * u * k, width * 0.45),
+          maxHeight: Math.min(110 * u * k, height * 0.3),
           objectFit: "contain",
+          objectPosition: `${left ? "left" : "right"} ${top ? "top" : "bottom"}`,
           opacity,
           filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.7))",
         }}
@@ -38,20 +47,19 @@ const CornerBadge: React.FC<{ project: Project; lang: Lang; assetBaseUrl: string
   return (
     <div
       style={{
-        position: "absolute",
-        top: pad,
-        left: pad,
+        ...place,
         opacity,
         fontFamily: font.fontFamily,
         fontWeight: font.fontWeight,
-        fontSize: 40 * u,
+        fontSize: 40 * u * k,
         color: "white",
-        textShadow: outline(2.5 * u),
+        textShadow: outline(2.5 * u * Math.max(0.6, k)),
         letterSpacing: "0.03em",
-        maxWidth: width * 0.4,
+        maxWidth: width * 0.45,
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis",
+        textAlign: left ? "left" : "right",
       }}
     >
       {font.uppercase ? title.toUpperCase() : title}
@@ -88,7 +96,7 @@ export const MainSection: React.FC<{
   return (
     <AbsoluteFill style={{ backgroundColor: "black" }}>
       {section.clips.length > 0 ? (
-        <ClipTrack project={project} clips={section.clips} format={format} assetBaseUrl={assetBaseUrl} useProxy={useProxy} punchFirst />
+        <ClipTrack project={project} clips={section.clips} format={format} assetBaseUrl={assetBaseUrl} useProxy={useProxy} sectionFrom={section.from} punchFirst />
       ) : (
         <NoFootage project={project} assetBaseUrl={assetBaseUrl} />
       )}

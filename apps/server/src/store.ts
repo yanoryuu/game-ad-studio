@@ -1,12 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
-import { createDefaultProject, projectSchema, type Project, type ProjectSummary } from "@gas/shared";
+import { createDefaultProject, migrateProject, projectSchema, type Project, type ProjectSummary } from "@gas/shared";
 import { badRequest, notFound } from "./errors";
 import { PROJECTS_DIR, projectDir } from "./paths";
 
 const PROJECT_FILE = "project.json";
-export const PROJECT_SUBDIRS = ["proxies", "thumbs", "assets", "renders"] as const;
+export const PROJECT_SUBDIRS = ["proxies", "thumbs", "assets", "renders", "tts"] as const;
 
 const ID_RE = /^[A-Za-z0-9_-]+$/;
 
@@ -59,11 +59,12 @@ export async function readProject(id: string): Promise<Project> {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") throw notFound(`Project not found: ${id}`);
     throw e;
   }
-  const parsed = projectSchema.safeParse(JSON.parse(raw));
-  if (!parsed.success) {
-    throw new Error(`project.json of ${id} is invalid: ${parsed.error.message}`);
+  try {
+    // v1 -> v2 upgrade happens here (in memory; persisted by the next write).
+    return migrateProject(JSON.parse(raw));
+  } catch (e) {
+    throw new Error(`project.json of ${id} is invalid: ${(e as Error).message}`);
   }
-  return parsed.data;
 }
 
 async function renameWithRetry(from: string, to: string): Promise<void> {
@@ -99,7 +100,11 @@ export async function writeProject(project: Project): Promise<Project> {
   return toSave;
 }
 
-/** Locked read -> mutate -> write. `mutate` may return a new object or modify in place. */
+/**
+ * THE helper for route modules: locked read (migrated) -> mutate -> validate + write. Returns the saved project.
+ * `mutate` may modify in place or return a new object. Throwing inside `mutate` aborts without writing.
+ * Never hold the lock during long work (ffmpeg, TTS): do the work outside, then call updateProject to store results.
+ */
 export function updateProject(id: string, mutate: (p: Project) => Project | void | Promise<Project | void>): Promise<Project> {
   return withProjectLock(id, async () => {
     const current = await readProject(id);
@@ -147,4 +152,54 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   }
   out.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0));
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* PUT merge: server-owned fields always come from the stored copy      */
+/* ------------------------------------------------------------------ */
+
+const sameVoice = (a: Project["script"][number]["voice"], b: Project["script"][number]["voice"]) =>
+  a.engine === b.engine && a.speaker === b.speaker && a.speed === b.speed;
+
+/**
+ * Applied by PUT /api/projects/:id so a debounced web save built from an older snapshot cannot
+ * clobber results written by background jobs:
+ *  - sources: the web may only delete / reorder. Sources unknown to the server are dropped; every other
+ *    field (paths, metadata, proxyStatus/proxyError, analysisStatus/analysisError) comes from `stored`.
+ *  - candidates: list comes from `stored` (only those whose source still exists); `adopted` comes from the body.
+ *  - script: the body wins, except a line whose text+voice equal the stored line while the stored one has
+ *    status "ok" and the body's doesn't -> the stored synthesis result (audioPath, durationSec, captions,
+ *    status, error, credit) is kept.
+ */
+export function mergeServerOwned(stored: Project, body: Project): Project {
+  const storedSources = new Map(stored.sources.map((s) => [s.id, s]));
+  const sources = body.sources.flatMap((s) => {
+    const st = storedSources.get(s.id);
+    return st ? [st] : [];
+  });
+  const keep = new Set(sources.map((s) => s.id));
+  const adopted = new Map(body.candidates.map((c) => [c.id, c.adopted]));
+  const candidates = stored.candidates
+    .filter((c) => keep.has(c.sourceId))
+    .map((c) => {
+      const a = adopted.has(c.id) ? adopted.get(c.id) : c.adopted;
+      const { adopted: _drop, ...rest } = c;
+      return a === undefined ? rest : { ...rest, adopted: a };
+    });
+  const storedLines = new Map(stored.script.map((l) => [l.id, l]));
+  const script = body.script.map((l) => {
+    const st = storedLines.get(l.id);
+    if (!st || st.status !== "ok" || l.status === "ok") return l;
+    if (st.text !== l.text || st.lang !== l.lang || !sameVoice(st.voice, l.voice)) return l;
+    const { audioPath: _a, durationSec: _d, error: _e, credit: _c, ...base } = l;
+    return {
+      ...base,
+      captions: st.captions,
+      status: st.status,
+      ...(st.audioPath ? { audioPath: st.audioPath } : {}),
+      ...(st.durationSec ? { durationSec: st.durationSec } : {}),
+      ...(st.credit ? { credit: st.credit } : {}),
+    };
+  });
+  return { ...body, sources, candidates, script };
 }

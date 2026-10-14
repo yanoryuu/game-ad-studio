@@ -6,7 +6,7 @@ import { Empty, Icon, Section } from "./ui";
 
 const SLOT_LABEL: Record<ClipSlot, string> = { hook: "フック", main: "本編" };
 const SLOT_HINT: Record<ClipSlot, string> = {
-  hook: "冒頭 2.5 秒。最も派手な瞬間を。",
+  hook: "冒頭 2.5 秒(ナレーションに合わせて最大 5 秒)。最も派手な瞬間を。",
   main: "プレイ映像を順にカットでつなぎます。",
 };
 
@@ -66,7 +66,7 @@ export function ClipList(props: {
   const remove = (id: string) => props.onChangeClips(project.clips.filter((c) => c.id !== id));
 
   return (
-    <Section title="クリップ" aside={<span className="mono muted">{project.clips.length}</span>}>
+    <Section className="clips-section" title="クリップ" aside={<span className="mono muted">{project.clips.length}</span>}>
       {project.clips.length === 0 ? (
         <Empty compact icon={<Icon.Scissors size={22} />} title="クリップがありません">
           {project.sources.length === 0

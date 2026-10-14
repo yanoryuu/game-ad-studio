@@ -1,7 +1,8 @@
-# Game Ad Studio — アーキテクチャ / 実装契約 (Phase 1)
+# Game Ad Studio — アーキテクチャ / 実装契約 (Phase 2)
 
 このドキュメントは `packages/compositions` / `apps/server` / `apps/web` を並行実装する際の **唯一の契約** です。
 仕様の背景は `docs/SPEC.md` を参照。ここに書かれた名前・パス・型・URL は勝手に変えないこと。変更が必要なら実装せずに報告する。
+Phase 2 で変わった/増えた箇所には **[v2]** を付けている。
 
 ---
 
@@ -13,7 +14,7 @@
 
 | パッケージ | バージョン |
 |---|---|
-| remotion / @remotion/* (player, bundler, renderer, cli, google-fonts, media-utils) | 4.0.535 |
+| remotion / @remotion/* (player, bundler, renderer, cli, google-fonts, media-utils, **captions [v2]**, **install-whisper-cpp [v2]**) | 4.0.535 |
 | react / react-dom | 19.3.0 |
 | zod | 4.3.6(v4。`import { z } from "zod"`) |
 | express | 5.3.0(Express 5: async ハンドラの reject は自動で error handler へ。パスのワイルドカードは `/*path` 形式) |
@@ -23,218 +24,348 @@
 | vite | 6.4.4(Node 20.12 のため 7 系は不可) / @vitejs/plugin-react 4.7.0 |
 | tsx | 4.23.15 / typescript 5.9.3 |
 
+- [v2] `@remotion/install-whisper-cpp` は `apps/server`、`@remotion/captions` / `@remotion/media-utils` は `packages/compositions` の依存。
 - TypeScript: `tsconfig.base.json`(strict, ES2022, moduleResolution "bundler", jsx "react-jsx", noEmit)。
   全パッケージ `"type": "module"`。import は拡張子なし(`./foo`)。
 - `@gas/shared` と `@gas/compositions` はビルドせず **TS ソースのまま** 消費する(`exports` → `./src/index.ts`)。
-  server は tsx、web は Vite、レンダリングは @remotion/bundler(webpack + esbuild)がそれぞれ TS を直接変換する。
+
+### 0.1 外部ツール [v2]
+
+| ツール | 既定の場所 | 備考 |
+|---|---|---|
+| VOICEVOX ENGINE 0.25.2 (CPU) | `D:\Tools\voicevox\windows-cpu\run.exe` | 起動: `run.exe --host 127.0.0.1 --port 50021`(冷起動 ~5 秒)。HTTP `http://127.0.0.1:50021` |
+| Piper | `D:\Tools\piper\piper.exe` | 声: `D:\Tools\piper\voices\<name>.onnx` + `<name>.onnx.json`(`en_US-lessac-medium`, `en_US-ryan-high`) |
+| whisper.cpp | `D:\Tools\whisper` | `@remotion/install-whisper-cpp` の `installWhisperCpp({ to })` / `downloadWhisperModel({ model, folder })` で導入(server-tts が必要時に実行) |
+
+設定は `apps/server/src/config.ts`(§6.8)。
 
 ## 1. ディレクトリ構成
 
 ```
 game-ad-studio/
   package.json            ルート(workspaces, scripts: dev / typecheck / studio)
-  tsconfig.base.json
+  gas.config.example.json [v2] ツール設定の例。実際の設定は gas.config.json(git 管理外・任意)
   docs/SPEC.md, docs/ARCHITECTURE.md
   packages/
-    shared/               @gas/shared       zod スキーマ + 型 + API 型   (scaffold 所有。変更禁止)
-      src/index.ts, project.ts, api.ts
+    shared/               @gas/shared       zod スキーマ + 型 + API 型 + migrateProject
+      src/index.ts, project.ts, migrate.ts, api.ts
     compositions/         @gas/compositions Remotion コンポジション
-      src/index.ts        公開 API(§5)
-      src/entry.ts        registerRoot(Root)  ← server が bundle する
-      src/Root.tsx        <Composition id="AdVideo" calculateMetadata=…>
-      src/AdVideo.tsx, metadata.ts, urls.ts, constants.ts (+ 自由に追加)
   apps/
     server/               @gas/server  Express :3101
-      src/index.ts, src/paths.ts (+ 自由に追加)
+      src/index.ts        アプリ組み立て(Phase 1 ルート + Phase 2 ルートモジュール登録)
+      src/store.ts        project.json の読み書き・ロック・updateProject・mergeServerOwned
+      src/sources.ts      [v2] 非同期ソース登録(プロキシ生成)・起動時リカバリ
+      src/config.ts       [v2] ツール設定
+      src/media.ts        ffprobe / ffmpeg ヘルパ(probe, makeProxy, makeThumb, toolAvailable)
+      src/errors.ts, files.ts, paths.ts, render.ts
+      src/routes/analysis.ts [v2] registerAnalysisRoutes(app)   ← server-highlight
+      src/analysis/**        [v2] 解析の実装                      ← server-highlight
+      src/routes/tts.ts      [v2] registerTtsRoutes(app)         ← server-tts
+      src/tts/**             [v2] TTS の実装                      ← server-tts
     web/                  @gas/web     Vite + React :5173
-      index.html, vite.config.ts, src/main.tsx, src/App.tsx (+ 自由に追加)
-  projects/               実行時データ(git 管理外。サーバーが作る)
+  projects/               実行時データ(git 管理外)
 ```
 
-### 担当範囲(厳守)
+### 担当範囲(Phase 2、厳守)
 
 | 担当 | 書いてよい場所 |
 |---|---|
-| compositions エージェント | `packages/compositions/src/**` のみ |
-| server エージェント | `apps/server/src/**` のみ |
-| web エージェント | `apps/web/src/**` と `apps/web/index.html` のみ |
+| server-highlight | `apps/server/src/analysis/**` と `apps/server/src/routes/analysis.ts` のみ |
+| server-tts | `apps/server/src/tts/**` と `apps/server/src/routes/tts.ts` のみ |
+| compositions | `packages/compositions/src/**` のみ |
+| web | `apps/web/src/**` のみ |
 
-- `package.json` / `tsconfig*.json` / `vite.config.ts` / `packages/shared/**` / `docs/**` は誰も編集しない。必要な変更は報告する。
+- それ以外(`package.json` / `tsconfig*.json` / `vite.config.ts` / `packages/shared/**` / `docs/**` /
+  `apps/server/src/` 直下のファイル / `.gitignore` / `gas.config*.json`)は誰も編集しない。必要な変更は報告する。
+- server の 2 エージェントは直下のモジュール(`store.ts`, `errors.ts`, `media.ts`, `paths.ts`, `config.ts`, `files.ts`)を **import して使うだけ**。
+  ffmpeg 実行ヘルパが足りなければ自分のフォルダ内に書く(`media.ts` の `run` は非 export)。
+- `npm install` は禁止(依存は揃っている)。
 - 完了条件: ルートで `npm run typecheck` が通ること。
-
-### ルートスクリプト
-
-- `npm run dev` … server (`tsx watch src/index.ts`) と web (`vite`) を concurrently で同時起動
-- `npm run typecheck` … 全 workspace で `tsc -p tsconfig.json`
-- `npm run studio` … `remotion studio packages/compositions/src/entry.ts`
 
 ## 2. ポート・オリジン
 
-- server: `http://localhost:3101`(`SERVER_PORT` が `@gas/shared` にある)
-- web(Vite dev): `http://localhost:5173`。`/api` と `/files` を `http://localhost:3101` にプロキシ(vite.config.ts 設定済み)。
-  → web のコードは **常に相対 URL**(`/api/...`, `/files/...`)で叩く。
-- server は `cors()` を有効にする(レンダリング時のヘッドレス Chrome から `http://localhost:3101` を読むため)。
+- server: `http://localhost:3101`(`SERVER_PORT`)。web(Vite dev): `http://localhost:5173`。`/api` と `/files` を 3101 にプロキシ。
+  → web のコードは **常に相対 URL**(`/api/...`, `/files/...`)。
+- server は `cors()` を有効にする(レンダリング時のヘッドレス Chrome 用)。
 
 ## 3. プロジェクトの保存形式
 
 ```
 projects/<projectId>/
-  project.json     Project(@gas/shared の projectSchema)を JSON.stringify(p, null, 2)
+  project.json     Project(schemaVersion 2)
   proxies/         <sourceId>.mp4      720p 30fps H.264 + AAC
-  thumbs/          <sourceId>.jpg
-  assets/          アップロード画像など <nanoid>.<ext>
+  thumbs/          <sourceId>.jpg / [v2] <candidateId>.jpg(= cand_<nanoid>.jpg)
+  assets/          アップロード画像・音声 <nanoid>.<ext>
+  tts/             [v2] <lineId>.wav   ナレーション音声
   renders/         書き出し結果 .mp4
 ```
 
-- `projects/` の場所: `<repo>/projects`(環境変数 `GAS_PROJECTS_DIR` で上書き可)。`apps/server/src/paths.ts` 参照。
-- ID: プロジェクト `p_<nanoid(10)>`、ソース `src_<nanoid(8)>`、クリップ `clip_<nanoid(8)>`。
-  英数と `_` `-` のみ(`projectSchema` が id を検証)。`@gas/shared` の `generateId(prefix)` を使ってもよい。
-- **アセット参照の規約**: project.json に入るパスは **プロジェクトディレクトリからの相対パス、区切りは `/`**
-  (例 `"proxies/src_ab12cd34.mp4"`, `"assets/k3j2h4.png"`)。`assetRefSchema` が先頭 `/`・`\`・ドライブ文字・`..` を拒否する。
-- 例外: `sources[].originalPath` だけは **元動画の絶対ローカルパス**(プロジェクト外。コピーしない)。
+- ID: プロジェクト `p_<nanoid(10)>`、ソース `src_<nanoid(8)>`、クリップ `clip_<nanoid(8)>`、
+  [v2] 候補 `cand_<nanoid(8)>`、台本行 `line_<8 文字>`(web が `createScriptLine()` / `generateId("line", 8)` で生成)。英数と `_` `-` のみ。
+- **アセット参照の規約**: project.json に入るパスはプロジェクトディレクトリからの相対パス、区切りは `/`。
+  例外: `sources[].originalPath` だけは元動画の絶対パス。
+- [v2] **マイグレーション**: server は project.json を読むたびに `migrateProject(raw)`(`@gas/shared`)を通す。
+  v1 ファイルはメモリ上で v2 に変換され、次の保存時に v2 で書かれる(読むだけではファイルは変わらない)。
 
-## 4. データモデル(`@gas/shared`)
+## 4. データモデル(`@gas/shared`, schemaVersion 2)
 
-正は `packages/shared/src/project.ts`。要点のみ:
+正は `packages/shared/src/project.ts`。要点:
 
 ```ts
-Format = "16:9" | "9:16";   FORMAT_SIZE["16:9"] = {1920,1080}, ["9:16"] = {1080,1920}
-Lang = "ja" | "en";  Fps = 30 | 60;  TemplateId = "hook-play-cta" | "features" | "trailer"
 Project = {
-  schemaVersion: 1, id, name, createdAt, updatedAt,          // ISO 文字列
-  template, formats: Format[], durationSec: 15 | 30 | null, fps, languages: Lang[],
-  game: { title, logo?, keyArt?, releaseText, steamUrl?, platforms: string[] },   // logo/keyArt はアセット参照
-  sources: { id, originalPath, proxyPath, thumbPath, durationSec, fps, width, height, hasAudio }[],
-  candidates: { id, sourceId, startSec, endSec, score, thumbPath? }[],   // Phase 2(Phase 1 は常に [])
-  clips: { id, sourceId, inSec, outSec, slot: "hook" | "main", gameVolume: 0..1, focusX?: 0..1 }[],
-  texts: { ja: { hook, cta }, en: { hook, cta } },   // cta 既定 "ウィッシュリストに追加" / "Wishlist now on Steam"
-  script: ScriptEntry[],                             // Phase 2(Phase 1 は [])
-  captions: { ja: Caption[], en: Caption[] },        // Caption = { text, startSec, endSec }(出力動画上の秒)。Phase 1 は空でよい
-  bgm?: { path, volume, duckingDb, fadeOutSec },
-  style: { primaryColor, accentColor, font: "noto-sans-jp" },
+  schemaVersion: 2, id, name, createdAt, updatedAt,
+  template, formats: Format[], durationSec: 15 | 30 | null, fps: 30 | 60, languages: Lang[],
+  game: { title, logo?, keyArt?, releaseText: { ja, en } /*[v2]*/, steamUrl?, platforms: string[] },
+  sources: {
+    id, originalPath, proxyPath, thumbPath, durationSec, fps, width, height, hasAudio,
+    proxyStatus: "pending" | "ready" | "error", proxyError?,                 // [v2]
+    analysisStatus: "none" | "running" | "done" | "error", analysisError?,  // [v2]
+  }[],
+  candidates: {                                                              // [v2]
+    id /*cand_*/, sourceId, startSec, endSec /*source 秒, 長さ 2..6*/, score /*0..1*/,
+    features: { scene, motion, loudness } /*各 0..1*/, thumbPath /*"thumbs/<id>.jpg"*/, adopted?: boolean,
+  }[],
+  clips: { id, sourceId, inSec, outSec, slot: "hook" | "main", gameVolume: 0..1, focusX? }[],
+  texts: { ja: { hook, cta }, en: { hook, cta } },
+  script: ScriptLine[],                                                      // [v2]
+  captions: { ja: Caption[], en: Caption[] },   // 手動/追加字幕(出力動画上の秒)。従来どおり
+  audio: {                                                                   // [v2] v1 の top-level bgm を置換
+    narrationVolume: 0..1,               // 既定 1
+    gameVolumeUnderNarration: 0..1,      // 既定 0.35。ナレーション中、各 clip.gameVolume に掛ける倍率
+    bgm?: { path, volume: 0..1, duckingDb: -60..0, fadeOutSec, loop: boolean },
+  },
+  style: {
+    primaryColor, accentColor, font: "noto-sans-jp",
+    watermark: { position: "top-left"|"top-right"|"bottom-left"|"bottom-right"|"none", scale: 0.25..3 },  // [v2] 既定 top-right, 1
+    captions: { enabled: boolean, position: "bottom" | "center", size: "m" | "l" },                        // [v2] 既定 true, bottom, m
+  },
+}
+
+ScriptLine = {                                 // [v2]
+  id, lang, section: "hook" | "main" | "cta", text,
+  voice: { engine: "voicevox" | "piper", speaker: string, speed: 0.5..2 },
+     // VOICEVOX: style id を文字列で("3")。Piper: 声の名前(.onnx の basename)
+  offsetSec: number >= 0,      // hook/cta: セクション開始からの遅延。main: この行の前に入れる追加の間
+  audioPath?: "tts/<lineId>.wav", durationSec?: number,
+  captions: { text, startSec, endSec }[],   // ★行の開始からの相対秒
+  status: "none" | "ok" | "stale" | "error", error?,
+  credit?: string,             // 合成時に server が設定。VOICEVOX は "VOICEVOX:<キャラ名>"。Piper は無し
 }
 ```
 
-- `createDefaultProject(name, { id?, now? })` で既定値つきの Project を作る。
-- `projectSchema.parse(x)` で検証。サーバーは読み込み時・PUT 時に必ず parse する。
-- `clips` の配列順 = 各 slot 内の再生順。`inSec/outSec` は **ソース動画上の秒**(プロキシと元動画は同じ時間軸)。
-- 任意フィールド(`logo` など)は「キーが無い」で表現する(`null` は不可)。
-- API の入出力型(`CreateProjectRequest`, `AddSourceRequest`, `UploadAssetResponse`, `RenderRequest`,
-  `RenderStartResponse`, `RenderJob`, `RenderStatus`, `ProjectSummary`, `HealthResponse`, `ApiError`)と zod スキーマは
-  `packages/shared/src/api.ts`。
+- 任意フィールドは「キーが無い」で表現する(`null` 不可)。
+- `script` 配列内で同じ (lang, section) の行の **配列順 = 再生順**。
+- **status の規則**: `none` 未合成 / `ok` 現在の text+voice と音声が一致 / `stale` 合成後に text か voice が変わった /
+  `error` 前回の合成失敗(`error` にメッセージ)。
+  **web は `ok` または `error` の行の text / voice を変更したら必ず `status: "stale"` にする**(offsetSec の変更は stale にしない)。
+  `stale` / `error` でも古い `audioPath` があればそのまま再生してよい。
+- 定数・ヘルパ(`@gas/shared`):
+  `DEFAULT_VOICES`(ja: `{ engine: "voicevox", speaker: "3", speed: 1 }` = ずんだもん(ノーマル)/ en: `{ engine: "piper", speaker: "en_US-lessac-medium", speed: 1 }`)、
+  `DEFAULT_VOICEVOX_URL`、`DEFAULT_VOICEVOX_SPEAKER`、`DEFAULT_VOICEVOX_CREDIT` (`"VOICEVOX:ずんだもん"`)、`DEFAULT_PIPER_VOICE`、
+  `DEFAULT_AUDIO`、`DEFAULT_BGM`(path 以外: volume 0.5, duckingDb -12, fadeOutSec 1.5, loop true)、`DEFAULT_STYLE`、
+  `createScriptLine(lang, section, text?, id?)`、`collectCredits(project, lang?)`(必要なクレジット一覧)、
+  `migrateProject(raw)`、`createDefaultProject(name, opts)`。
+- **VOICEVOX のクレジット**: VOICEVOX の声を使った動画には「VOICEVOX:<キャラ名>」の表記が必要。
+  web は `collectCredits(project, lang)` を書き出しパネル等に表示し、注意を促す。
+- API 型: `packages/shared/src/api.ts`(Phase 1 の型 + [v2] `AddSourceResponse`, `AnalyzeStartResponse`,
+  `TtsStatusResponse`, `TtsVoice`, `ttsVoicesQuerySchema`, `TtsSynthesizeRequest`, `TtsPreviewRequest`)。
+
+### 4.1 v1 → v2 マイグレーション(`migrateProject`)
+- `game.releaseText: string` → `{ ja: s, en: s }`
+- `sources[]` に `proxyStatus: "ready"`, `analysisStatus: "none"` を追加
+- `candidates`: v2 形式でないものは削除(v1 では常に空)
+- `script`: v1 エントリは v2 行に変換(ja の speakerId → speaker 文字列、status "none"、音声は捨てる)
+- `bgm` → `audio.bgm`(`loop: true` 追加)。`audio` の他項目は既定値
+- `style.watermark` / `style.captions` に既定値
 
 ## 5. Compositions パッケージ API(`@gas/compositions`)
 
-`packages/compositions/src/index.ts` から以下を export する(シグネチャ固定):
-
 ```ts
-export type AdVideoProps = {        // interface ではなく type(Remotion の Record<string, unknown> 制約のため)
-  project: Project;
-  format: Format;
-  lang: Lang;
-  assetBaseUrl: string;             // プレビュー: ""  /  レンダー: "http://localhost:3101"
-  useProxy: boolean;                // プレビュー: true /  レンダー: false
-};
+export type AdVideoProps = { project: Project; format: Format; lang: Lang; assetBaseUrl: string; useProxy: boolean };
 export const AdVideo: React.FC<AdVideoProps>;
-export function calcAdMetadata(project: Project, format: Format, fps?: Fps):
+export function calcAdMetadata(project: Project, format: Format, lang: Lang, fps?: Fps):   // [v2] lang 追加
   { durationInFrames: number; fps: number; width: number; height: number };
-export function assetUrl(baseUrl: string, projectId: string, relPath: string): string;
-  // => `${baseUrl}/files/${projectId}/${relPath}`(セグメントごとに encodeURIComponent)
-export function sourceUrl(baseUrl: string, project: Project, sourceId: string, useProxy: boolean): string;
-  // useProxy=true  => assetUrl(baseUrl, project.id, source.proxyPath)
-  // useProxy=false => `${baseUrl}/api/projects/${project.id}/sources/${sourceId}/original`
+export function buildNarrationPlan(project: Project, lang: Lang, fps: number): NarrationPlan;  // [v2]
+export type NarrationPlan = { lines: PlacedNarration[]; overflowLineIds: string[] };
+export type PlacedNarration = {
+  lineId: string; section: "hook" | "main" | "cta";
+  from: number;               // 出力タイムライン上の絶対開始フレーム
+  durationInFrames: number;   // 実際に再生するフレーム数(セクション末で切った後)
+  naturalFrames: number;      // 音声本来の長さ
+  cut: boolean;               // 切られた(または入りきらず落とされた)
+};
+export function assetUrl(baseUrl, projectId, relPath): string;
+export function sourceUrl(baseUrl, project, sourceId, useProxy): string;
 export const COMPOSITION_ID = "AdVideo";
 ```
 
-- `index.ts` は `entry.ts` を import しない(registerRoot の副作用を web/server に持ち込まない)。
-- `entry.ts`: `registerRoot(Root)`。`Root` は `<Composition id="AdVideo" component={AdVideo} defaultProps=… calculateMetadata={({props}) => calcAdMetadata(props.project, props.format)} />`。
-  `calculateMetadata` は `props.project.fps` を使う(fps 上書きは server が project.fps を書き換えて渡す。§6.6)。
-- `calcAdMetadata` の尺と `AdVideo` の描画タイムラインは必ず一致させる(同じタイムライン計算関数を共有すること)。
-- ビデオは `OffthreadVideo`(remotion)推奨: Player では `<video>` にフォールバックし、レンダー時は元動画のコーデック(mkv 等)も扱える。
-  `startFrom`/`trimBefore` 相当で `inSec` から再生、`volume = clip.gameVolume`。
-- フォント: `@remotion/google-fonts/NotoSansJP` の `loadFont()`(モジュールトップで呼ぶ)。
-- 画像: `Img` + `assetUrl(assetBaseUrl, project.id, ref)`。
-- 空のプロジェクト(clips/sources なし、logo なし、テキスト空)でも例外を出さず描画できること(Studio/Player で必ず開ける)。
-- 存在しない sourceId を参照するクリップはスキップ(`sourceUrl` は throw するので事前に確認)。
+- `calcAdMetadata` / `<AdVideo>` / `buildNarrationPlan` は同じタイムライン計算を共有し、必ず一致させる。
+  `Root` の `calculateMetadata` は `calcAdMetadata(props.project, props.format, props.lang)`。
+- web は `buildNarrationPlan(...).overflowLineIds` で「ナレーションが入りきらない」警告を出す。
+- その他 Phase 1 の規則(OffthreadVideo、NotoSansJP、空プロジェクトで落ちない、未知 sourceId のクリップはスキップ)は継続。
+- [v2] **`proxyStatus !== "ready"` のソースを参照するクリップは `useProxy=true`(プレビュー)では描画しない**(プロキシファイルがまだ無い)。
+  レンダー(`useProxy=false`)は元動画を使うので描画してよい。尺計算はどちらでも同じにする(黒で埋める)。
+- [v2] `game.releaseText[lang]` を表示。ウォーターマーク(main セクションのロゴ/タイトル)は `style.watermark.position` の角に
+  `scale` 倍で表示、`"none"` なら非表示。
 
-### テンプレート `hook-play-cta`(Phase 1 で実装する唯一のテンプレート)
+### 5.1 ナレーションのタイムライン規則 [v2](テンプレート `hook-play-cta`)
 
-| セクション | 長さ(目安) | 内容 |
-|---|---|---|
-| hook | 2.5 秒 | `slot:"hook"` のクリップ(順に連結)+ 大きな `texts[lang].hook` |
-| main | 残り | `slot:"main"` のクリップを順にカットで連結 |
-| end card | 3 秒 | keyArt(背景)/ logo(無ければ title を大きく)、`game.title`、`game.releaseText`、`texts[lang].cta`、`game.platforms`("Steam" 表記) |
+対象は `script` のうち `lang === props.lang`、`text.trim() !== ""`、`audioPath` と `durationSec` を持つ行(status が stale/error でも音声があれば使う)。
 
-- `durationSec === null`(自由): main は各クリップの自然長(`outSec - inSec`)の合計。hook も hook クリップの合計を 2.5 秒にトリム(hook クリップが無ければ main 先頭を流用、それも無ければ黒+テキスト)。
-- `durationSec` が 15 / 30: 全体をちょうど `durationSec * fps` フレームにする。main の尺 = 全体 − hook − end card を、各 main クリップへ自然長に比例して配分(長ければトリム=`outSec` 側を詰める、短ければ速度は変えずに最後のフレームで保持 or 比例配分の結果として各クリップを均等に縮める — いずれも compositions の裁量)。
-- 字幕(`captions[lang]`)が空でなければ下部に表示(Phase 1 は空で可)。
-- 9:16 は Phase 3。ただし `format` に応じて `FORMAT_SIZE` の解像度で崩れない最低限のレイアウトにはしておく(映像は contain + ぼかし背景が理想)。
+- **hook 行**: 各行 `from = hook 開始 + offsetSec`(行同士は独立。重なっても良い)。
+- **main 行**: main 開始から順番に連続再生。`t = main 開始` から始め、各行で `t += offsetSec` → その行を `t` に配置 → `t += durationSec`。
+- **cta 行**: `from = エンドカード開始 + offsetSec`。
+- **`durationSec === null`(自由)**: 各セクションはナレーションが収まるまで伸びる。
+  - hook の長さ = max(2.5 秒, max(hook 行の offsetSec + durationSec))
+  - main の長さ = max(クリップの自然長の合計, main 行の offsetSec + durationSec の総和)。映像が足りない分は最後のフレームを保持(または黒)— compositions の裁量
+  - エンドカード = max(3 秒, max(cta 行の offsetSec + durationSec))
+- **`durationSec` が 15 / 30(固定)**: フック = max(2.5秒, min(5秒, フック行の offset+長さの最大))、エンドカード = max(3秒, min(5秒, cta 行の同値))。本編 = 全体 − フック − エンドで、合計は常に durationSec ちょうど。web は `getSectionDurations()` で同じ値を得る(定数を複製しない)。
+  セクション末を越えるナレーションはセクション末で **切る**(短いフェード可)。開始位置がすでにセクション外の行は落とす。
+  切った/落とした行の id は `overflowLineIds` に入り、web が警告を出す。
+- 秒→フレームは `Math.round(sec * fps)`。
+
+### 5.2 字幕 [v2]
+- `style.captions.enabled` が false なら字幕を一切出さない。
+- ナレーション字幕: 各配置行の `captions[i]` を `from + round(startSec*fps)` 〜 `from + round(endSec*fps)` に表示(切られた行は再生範囲内のみ)。
+- 手動字幕 `project.captions[lang]` も従来どおり(出力タイムライン秒)表示。重なったら後に始まった方を優先。
+- 位置 `bottom` / `center`、サイズ `m` / `l`。
+
+### 5.3 音声ミックスとダッキング [v2]
+- **ナレーション**: `<Audio>` 音量 = `audio.narrationVolume`。
+- **「ナレーション中」** = 再生中のいずれかのナレーション区間 [from, from + durationInFrames) に入っているフレーム。
+- **ゲーム音**: クリップ音量 = `clip.gameVolume × (ナレーション中 ? audio.gameVolumeUnderNarration : 1)`。
+- **BGM**(`audio.bgm` があるとき): 基本音量 `bgm.volume`、ナレーション中は `× 10^(duckingDb/20)`。
+  `loop: true` なら動画全体をループで埋め、false なら 1 回だけ。末尾 `fadeOutSec` でフェードアウト(先頭は短いフェードイン可)。
+- ダッキングの切り替えは急変させず、前後 ~0.2 秒(`Math.round(0.2*fps)` フレーム)で補間する。
+- 音量は Remotion の `volume` コールバック(フレーム関数)で実装する。
 
 ## 6. Server HTTP API(`@gas/server`, port 3101)
 
-- JSON API。エラーは常に `{ error: string }` + 適切なステータス(400 検証エラー / 404 無し / 500)。
-- リクエストボディは `@gas/shared` の zod スキーマで検証する。
+- JSON API。エラーは常に `{ error: string }` + ステータス(400 / 404 / 409 / 500 / 501 / 503)。
+- リクエストボディは `@gas/shared` の zod スキーマで検証(`parseBody` in `errors.ts`)。
 
-| Method | Path | Body | 200 レスポンス |
+| Method | Path | Body | レスポンス |
 |---|---|---|---|
-| GET | `/api/health` | — | `HealthResponse` `{ ok: true, ffmpeg: boolean, ffprobe: boolean }` |
-| GET | `/api/projects` | — | `ProjectSummary[]`(updatedAt 降順) |
-| POST | `/api/projects` | `CreateProjectRequest` `{ name }` | `Project`(201 でも可)。`createDefaultProject` で生成し保存、ディレクトリ作成 |
-| GET | `/api/projects/:id` | — | `Project` |
-| PUT | `/api/projects/:id` | `Project`(全体) | `Project`(保存後。`updatedAt` はサーバーが更新、`id`/`createdAt` は URL/既存値を優先) |
-| POST | `/api/projects/:id/sources` | `AddSourceRequest` `{ path }`(絶対パス) | 更新後の `Project` |
+| GET | `/api/health` | — | `HealthResponse` |
+| GET | `/api/projects` | — | `ProjectSummary[]` |
+| POST | `/api/projects` | `{ name }` | 201 `Project` |
+| GET | `/api/projects/:id` | — | `Project`(v2 に migrate 済み) |
+| PUT | `/api/projects/:id` | `Project` | `Project`(§6.2 のマージ後) |
+| POST | `/api/projects/:id/sources` | `{ path }` | **[v2] 201 `Project`(即時。新ソースは末尾、proxyStatus "pending")** |
 | GET | `/api/projects/:id/sources/:sourceId/original` | — | 元動画(Range 対応) |
-| POST | `/api/projects/:id/assets` | multipart, field `"file"` | `UploadAssetResponse` `{ path: "assets/<nanoid>.<ext>" }`(project.json は変更しない。web が PUT で参照を書く) |
-| GET | `/files/:projectId/*path` | — | プロジェクトディレクトリ内のファイル(Range 対応) |
-| POST | `/api/projects/:id/render` | `RenderRequest` `{ format, lang, fps? }` | `RenderStartResponse` `{ jobId }` |
-| GET | `/api/render/:jobId` | — | `RenderJob` `{ jobId, projectId, format, lang, status, progress, outputPath?, error? }` |
+| POST | `/api/projects/:id/assets` | multipart `"file"` | `{ path: "assets/<nanoid>.<ext>" }` |
+| GET | `/files/:projectId/*path` | — | プロジェクト内ファイル(Range 対応) |
+| POST | `/api/projects/:id/render` | `{ format, lang, fps? }` | `{ jobId }` |
+| GET | `/api/render/:jobId` | — | `RenderJob` |
+| POST | `/api/projects/:id/sources/:sourceId/analyze` | — | **[v2] 202 `Project`**(server-highlight、§6.5) |
+| GET | `/api/tts/status` | — | **[v2] `TtsStatusResponse`**(server-tts、§6.6) |
+| GET | `/api/tts/voices?engine=voicevox\|piper` | — | **[v2] `TtsVoice[]`** |
+| POST | `/api/projects/:id/tts` | `TtsSynthesizeRequest` | **[v2] 200 `Project`** |
+| POST | `/api/tts/preview` | `TtsPreviewRequest` | **[v2] `audio/wav`** |
 
-### 6.1 ソース登録 `POST /api/projects/:id/sources`
-1. `path` の存在確認(無ければ 400)。
-2. `ffprobe -v error -print_format json -show_streams -show_format <path>` → durationSec, fps(`r_frame_rate` / `avg_frame_rate` を数値化), width, height, hasAudio。
-3. プロキシ生成(同期で完了を待ってからレスポンス。長尺は時間がかかるので web はローディング表示):
-   `ffmpeg -y -i <in> -vf "scale=-2:720,fps=30" -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -c:a aac -b:a 128k -ac 2 -ar 48000 -movflags +faststart proxies/<sid>.mp4`
-   (音声なしなら `-an`。720p 未満の素材は拡大しない: `scale=-2:'min(720,ih)'`)
-4. サムネイル: `ffmpeg -y -ss <min(1, dur/2)> -i <in> -frames:v 1 -vf scale=-2:360 thumbs/<sid>.jpg`
-5. `sources` に追加して保存、Project を返す。
-- ffmpeg/ffprobe は `child_process.spawn`(shell なし、引数配列)。Windows パスの空白・日本語に注意。
+### 6.1 ソース登録 [v2: 非同期]
+1. path の存在確認(無ければ 400)→ ffprobe(読めなければ 400)。durationSec/fps/width/height/hasAudio はこの時点で確定。
+2. `sources` に `proxyStatus: "pending"`, `analysisStatus: "none"` で追加して保存し、**201 で Project を即返す**。
+3. バックグラウンドでプロキシ(Phase 1 と同じ ffmpeg 引数、同時 2 本まで)+ サムネイルを生成し、
+   `updateProject` で `proxyStatus: "ready"`(または `"error"` + `proxyError`)に更新。
+4. web は pending のソースがある間 `GET /api/projects/:id` を ~1.5 秒間隔でポーリングする。
+- サーバー起動時: pending のまま残ったソースはプロキシを作り直し、`analysisStatus: "running"` のまま残ったものは `"error"`("Interrupted")にする(`sources.ts` の `recoverInterruptedJobs`)。
 
-### 6.2 ファイル配信(Range)
-- `/files/:projectId/*path` と `/sources/:sid/original` はどちらも HTTP Range(206, `Accept-Ranges: bytes`, `Content-Range`)に対応。
-  `res.sendFile(absPath)` は Range 対応済みなので利用してよい(`/files` は root オプションまたは手動検証で **プロジェクトディレクトリ外へのトラバーサルを拒否**)。
-- Content-Type は拡張子から(mp4/mov/mkv/webm/jpg/png/webp/mp3/wav)。
+### 6.2 PUT のマージ規則(`store.ts` の `mergeServerOwned`)[v2]
+web のデバウンス保存が、バックグラウンド処理の結果を古いスナップショットで上書きしないように:
+- `sources`: web は **削除と並べ替えのみ** 可。サーバーが知らないソースは捨てる。各ソースの全フィールドは保存済みの値を使う。
+- `candidates`: 一覧は保存済みの値(残っているソースのもの)。`adopted` だけ body の値を採用。
+- `script`: body が正。ただし text・voice・lang が保存済みと同じで、保存済みが `ok`・body が `ok` 以外の行は、保存済みの合成結果
+  (audioPath, durationSec, captions, status, credit)を残す。
+- web はさらに: TTS(`POST /tts`)を呼ぶ前に保留中の保存を flush し、応答の Project で state を置き換える。
 
 ### 6.3 アセットアップロード
-- multer で `projects/<id>/assets/<nanoid(10)><ext小文字>` に保存。画像(png/jpg/jpeg/webp/gif/svg)+ 音声(mp3/wav/m4a/ogg、Phase 2 の BGM 用)を許可。
+- 画像(png/jpg/jpeg/webp/gif/svg)+ **音声(mp3/wav/m4a/ogg/aac)** を許可。BGM は upload → `audio.bgm.path` に設定して PUT。
 
-### 6.4 レンダリング
-- `bundle({ entryPoint: COMPOSITIONS_ENTRY })`(`apps/server/src/paths.ts`。`<repo>/packages/compositions/src/entry.ts`)。
-  bundle はプロセス内でキャッシュして再利用してよい(初回 ~15 秒)。
-- `inputProps: AdVideoProps = { project, format, lang, assetBaseUrl: "http://localhost:3101", useProxy: false }`。
-- `selectComposition({ serveUrl, id: COMPOSITION_ID, inputProps })` → `renderMedia({ composition, serveUrl, codec: "h264", outputLocation, inputProps, onProgress })`。
-- 出力: `projects/<id>/renders/<YYYYMMDD-HHmmss>_<16x9|9x16>_<lang>.mp4`、`outputPath` は project 相対(`renders/...`)。
-  web は `/files/<pid>/<outputPath>` でダウンロード/再生する。
-- ジョブはメモリ上に保持、同時実行 1(キュー)。status: `queued` → `bundling` → `rendering`(progress 0..1)→ `done` / `error`。
-- ヘッドレス Chrome は初回レンダー時に Remotion が自動ダウンロードする(事前操作不要)。
-- `fps` 指定時は `project` を複製して `project.fps = fps` にして渡す(AdVideoProps に fps は無い)。
-- Phase 1 の UI は 16:9 のみ書き出すが、API は 9:16 も受け付ける。
+### 6.4 共有ヘルパ(route モジュールが使うもの)
+- `store.ts`:
+  - `updateProject(id, mutate)` — **ロック付き read(migrate 済み)→ mutate → 検証 → 原子的 write**。保存後の Project を返す。
+    mutate 内で throw すると書き込まずに中断。**長い処理(ffmpeg・TTS)はロックの外で行い、結果だけ updateProject で書く。**
+  - `readProject(id)`(404 は HttpError)、`projectExists(id)`、`assertSafeId(id, what?)`、`withProjectLock(id, fn)`。
+- `errors.ts`: `HttpError(status, msg)`, `badRequest`, `notFound`, `parseBody(schema, body)`。
+- `paths.ts`: `projectDir(id)`, `REPO_ROOT`。 `media.ts`: `probe(file)`, `toolAvailable("ffmpeg"|"ffprobe")`。
+- `config.ts`: `config`, `resolveVoicevoxEnginePath()`(§6.8)。
+- ルート関数シグネチャ(固定): `export function registerAnalysisRoutes(app: Express): void` / `export function registerTtsRoutes(app: Express): void`
+  (`import type { Express } from "express"`)。index.ts が `/files` の後・404 ハンドラの前で呼ぶ。現在はスタブ(501)。
 
-### 6.5 その他
-- `express.json({ limit: "10mb" })`、`cors()`。
-- `__dirname` は無い(ESM)。`paths.ts` の `REPO_ROOT` / `PROJECTS_DIR` / `projectDir()` を使う。
-- project.json の書き込みは一時ファイル → rename で原子的に。
+### 6.5 ハイライト解析 [v2](server-highlight)
+`POST /api/projects/:id/sources/:sourceId/analyze`(body なし)
+- 404: プロジェクト/ソースが無い。409: `proxyStatus !== "ready"` または既に `analysisStatus === "running"`。
+- `analysisStatus: "running"`(`analysisError` 削除)にして保存し、**202 で Project を返す**。処理はバックグラウンド。
+- 解析は **プロキシ**(720p/30fps)を入力にしてよい(速い)。時間はソースと同じ時間軸。
+  特徴量: シーン切替(`select='gt(scene,X)'` / scdet)、動き(フレーム差分)、音の盛り上がり(`ebur128` / `astats`)。各 0..1 に正規化。
+- 候補: 2〜6 秒の区間、`score` 0..1、重なりは避ける。上限は 1 ソースあたり 30 件程度。
+  サムネ `thumbs/<candId>.jpg`(区間中央、高さ 360 程度)。
+- 完了時 `updateProject` で: **そのソースの既存候補を全部置き換え**(他ソースの候補は残す。古い候補のサムネファイルは削除してよい)、
+  `analysisStatus: "done"`。失敗時 `"error"` + `analysisError`(候補はそのまま)。途中でソースが消えていたら何もしない。
+- web は running の間 GET をポーリングする。
+
+### 6.6 TTS [v2](server-tts)
+- `GET /api/tts/status` → `TtsStatusResponse`:
+  `voicevox: { ok, version?, url, error? }`(`GET <url>/version`)、`piper: { ok, error? }`(exe と既定声の存在)、`whisper: { ok, model, error? }`(whisper.cpp とモデルの存在)。
+  status は副作用なし(エンジン自動起動はしない)。
+- `GET /api/tts/voices?engine=voicevox|piper` → `TtsVoice[]` `{ engine, speaker, name, lang, credit? }`。
+  VOICEVOX: `/speakers` の各 style を 1 件に(speaker = style id 文字列、name = "キャラ名(スタイル名)"、lang "ja"、credit "VOICEVOX:キャラ名")。
+  Piper: voicesDir の `*.onnx`(name = basename、lang は `.onnx.json` の language から、en 以外は除外してよい)。
+  エンジンが使えなければ 503。
+- `POST /api/projects/:id/tts` body `{ lang, lineIds? }` → **200 Project(同期)**。
+  - 対象: lineIds 省略時は `lang` の行で text が空でなく status が `ok` 以外のもの。指定時はその行(`lang` が違う行は 400)。
+  - text が空の行は音声を消して status `"none"`。
+  - 各行: 合成 → `tts/<lineId>.wav`(上書き)→ `audioPath`, `durationSec`(wav の実長)、`captions`(行頭からの相対秒)、
+    `status: "ok"`、`error` 削除、`credit` 設定。失敗した行は `status: "error"` + `error`(要求全体は 200)。
+  - 合成はロックの外で行い、最後に `updateProject` で結果を書く。その時点で行の text/voice が合成時と変わっていたらその行は書かない(stale のまま)。
+  - VOICEVOX: `POST /audio_query?text=<encodeURIComponent>&speaker=<id>` → `speedScale = voice.speed` → `POST /synthesis?speaker=<id>`。
+    字幕タイミングは audio_query の accent_phrases のモーラ長(+ pause_mora、prePhonemeLength、speedScale で補正)から算出し、
+    句読点・アクセント句単位で読みやすい長さ(~15 文字以内目安)にまとめる。
+    エンジン未起動なら `resolveVoicevoxEnginePath()` の run.exe を `--host 127.0.0.1 --port <url のポート>` で起動して最大 ~30 秒待つ(server 終了時に kill)。
+  - Piper: `piper.exe --model <voicesDir>/<voice>.onnx --output_file <wav> --length_scale <1/speed>`(text は stdin、UTF-8)。
+    **Piper の出力はピーク 0 dBFS なので、-3 dBFS 程度に正規化/ゲインを下げる**(ffmpeg で可)。
+    単語タイミングは whisper.cpp(`@remotion/install-whisper-cpp` の `transcribe`, tokenLevelTimestamps)で取得し、
+    元の台本テキストの単語に合わせて字幕チャンク(数語ずつ)を作る。whisper が無い場合は文字数比例で配分(status は ok)。
+  - 出力 wav は 48kHz or エンジンのネイティブで可(Remotion が再生できる PCM WAV)。
+- `POST /api/tts/preview` body `{ engine, speaker, speed, text }` → `audio/wav` バイナリ(保存しない)。
+
+### 6.7 その他
+- `express.json({ limit: "10mb" })`、`cors()`。`server.requestTimeout = 0`(TTS が長くなりうる)。
+- `__dirname` は無い(ESM)。`paths.ts` を使う。project.json の書き込みは一時ファイル → rename。
+
+### 6.8 設定 `apps/server/src/config.ts` [v2]
+`<repo>/gas.config.json`(任意、git 管理外。例: `gas.config.example.json`)を起動時に 1 回読む。キーはすべて任意。
+
+```ts
+config = {
+  voicevox: { url: "http://127.0.0.1:50021", enginePath?: string },
+  piper:    { exePath: "D:\\Tools\\piper\\piper.exe", voicesDir: "D:\\Tools\\piper\\voices" },
+  whisper:  { dir: "D:\\Tools\\whisper", model: "base.en" },
+}
+resolveVoicevoxEnginePath(): Promise<string | null>
+  // enginePath があればそれ(存在しなければ null)。無ければ D:\Tools\voicevox 以下の run.exe を探す
+  // (深さ 3、結果キャッシュ)。既定で D:\Tools\voicevox\windows-cpu\run.exe が見つかる。
+```
 
 ## 7. Web(`@gas/web`, Vite :5173)
 
-- API は相対 URL(`/api/...`)。型は `@gas/shared` から import。
-- プレビュー: `@remotion/player` の `<Player component={AdVideo} inputProps={{ project, format, lang, assetBaseUrl: "", useProxy: true }} {...calcAdMetadata(project, format)} />`
-  (`durationInFrames`, `fps`, `compositionWidth=width`, `compositionHeight=height` を渡す)。`inputProps` は `useMemo` で安定させる。
-- 画像/サムネは `assetUrl("", project.id, rel)`、ソース動画は `sourceUrl("", project, sid, true)`。
-- Phase 1 の画面(最低限): プロジェクト一覧/作成 → 編集画面(ソース追加: 絶対パス入力 / ゲーム情報・ロゴ・キーアートのアップロード / hook・CTA テキスト(言語タブ)/ クリップ追加・in/out・slot・並べ替え・gameVolume / 尺・fps 選択 / Player プレビュー / 16:9 書き出しボタン+進捗ポーリング(`GET /api/render/:jobId` を 1 秒間隔)+ 完了後のリンク)。
-- 保存は `PUT /api/projects/:id` に Project 全体(デバウンス保存推奨)。サーバーが返した Project で state を置き換える。
+- API は相対 URL、型は `@gas/shared`。プレビューは `calcAdMetadata(project, format, lang)`(**[v2] lang 追加**)。
+- [v2] 画面に追加するもの:
+  - ソース: 登録は即完了 → pending 表示(ポーリング)/ error 表示。ready のソースに「ハイライト解析」ボタン → running 表示 → 候補一覧
+    (サムネ・スコア・特徴量バー・プレビュー再生・「hook に採用」「main に採用」= clip 追加 + `adopted: true`)。
+  - 台本: 言語タブ × セクション(hook/main/cta)ごとに行の追加・削除・並べ替え、text、声(`GET /api/tts/voices`)、速度、offsetSec、
+    status 表示、「合成」(`POST /tts`)、「試聴」(`POST /tts/preview`)。text/voice 変更で stale にする(§4)。
+    TTS 状態(`GET /api/tts/status`)を表示。`buildNarrationPlan(...).overflowLineIds` で溢れ警告。`collectCredits` でクレジット表示。
+  - BGM: 音声アップロード → `audio.bgm`(`DEFAULT_BGM` で初期化)、volume / duckingDb / fadeOutSec / loop、削除。
+    `audio.narrationVolume` / `audio.gameVolumeUnderNarration`。
+  - スタイル: ウォーターマーク位置(none 含む)・サイズ、字幕 on/off・位置・サイズ。
+  - 発売情報は言語タブごと(`game.releaseText[lang]`)。
+- 保存は `PUT /api/projects/:id` に Project 全体(デバウンス)。サーバーが返した Project で state を置き換える
+  (ただし編集中の入力を巻き戻さないよう注意。ポーリング結果と保存の競合は §6.2 のマージで server 側が吸収する)。
 
 ## 8. 動作確認の手順(参考)
 
 1. `npm run dev` → `http://localhost:5173`
-2. `curl http://localhost:3101/api/health`
+2. `curl http://localhost:3101/api/health` / `curl http://localhost:3101/api/tts/status`
 3. `npm run studio` で AdVideo を単体確認(defaultProps は空プロジェクト)

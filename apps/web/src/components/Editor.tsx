@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useState } from "react";
-import { generateId, type Clip, type Format, type Lang } from "@gas/shared";
+import { generateId, type Clip, type Format, type Lang, type Project, type Source } from "@gas/shared";
 import { api, ApiError } from "../api";
+import { insertClip } from "../autoArrange";
 import { useHealth } from "../hooks/useHealth";
 import { useProject, type SaveState } from "../hooks/useProject";
 import { navigate } from "../hooks/useHashRoute";
-import { cx } from "../util";
+import { basename, cx } from "../util";
+import { AudioPanel } from "./AudioPanel";
+import { CandidatesPanel } from "./CandidatesPanel";
 import { ClipList } from "./ClipList";
-import { ClipMarker, type ClipDraft } from "./ClipMarker";
+import { ClipMarker, type ClipDraft, type MarkerCue } from "./ClipMarker";
 import { Inspector } from "./Inspector";
 import { PreviewPane } from "./PreviewPane";
 import { RenderPanel } from "./RenderPanel";
+import { ScriptEditor } from "./ScriptEditor";
 import { ServerDown } from "./ServerDown";
 import { SourcesPanel } from "./SourcesPanel";
-import { Banner, Empty, Icon, Spinner } from "./ui";
+import { StylePanel } from "./StylePanel";
+import { Banner, Empty, Icon, Spinner, Tabs } from "./ui";
+
+type LeftTab = "media" | "cands" | "script";
+type RightTab = "settings" | "audio" | "style";
+
+const POLL_MS = 1500;
 
 function usePref<T extends string>(key: string, initial: T, allowed: readonly T[]) {
   const [v, setV] = useState<T>(() => {
@@ -40,18 +50,31 @@ function usePref<T extends string>(key: string, initial: T, allowed: readonly T[
 
 export function Editor({ projectId }: { projectId: string }) {
   const store = useProject(projectId);
-  const { project, update, flush, mutateOnServer, saveState, saveError } = store;
+  const { project, update, flush, mutateOnServer, refreshServerOwned, removeSource, saveState, saveError } = store;
   const health = useHealth();
   const [format, setFormat] = usePref<Format>(`gas:${projectId}:format`, "16:9", ["16:9", "9:16"]);
   const [lang, setLang] = usePref<Lang>(`gas:${projectId}:lang`, "ja", ["ja", "en"]);
+  const [leftTab, setLeftTab] = usePref<LeftTab>(`gas:${projectId}:left`, "media", ["media", "cands", "script"]);
+  const [rightTab, setRightTab] = usePref<RightTab>(`gas:${projectId}:right`, "settings", ["settings", "audio", "style"]);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [editingClipId, setEditingClipId] = useState<string | null>(null);
+  const [cue, setCue] = useState<MarkerCue | null>(null);
+  const [activeCandId, setActiveCandId] = useState<string | null>(null);
+  const [hoverCandId, setHoverCandId] = useState<string | null>(null);
 
   // Reload the project once the server comes back after a failed load.
   const { reload, loadError } = store;
   useEffect(() => {
     if (health.status === "ok" && loadError instanceof ApiError && loadError.status === 0) void reload();
   }, [health.status, loadError, reload]);
+
+  // Background work (proxy encoding / highlight analysis): poll GET and merge server-owned fields.
+  const needsPoll = !!project?.sources.some((s) => s.proxyStatus === "pending" || s.analysisStatus === "running");
+  useEffect(() => {
+    if (!needsPoll) return;
+    const t = window.setInterval(() => void refreshServerOwned(), POLL_MS);
+    return () => window.clearInterval(t);
+  }, [needsPoll, refreshServerOwned]);
 
   // Default-select the first source.
   useEffect(() => {
@@ -60,6 +83,13 @@ export function Editor({ projectId }: { projectId: string }) {
       setSelectedSourceId(project.sources[0]?.id ?? null);
     }
   }, [project, selectedSourceId]);
+
+  // Drop the candidate preview cue when the source changes.
+  useEffect(() => {
+    setCue(null);
+    setActiveCandId(null);
+    setHoverCandId(null);
+  }, [selectedSourceId]);
 
   const updateClip = useCallback(
     (clipId: string, patch: Partial<ClipDraft>) =>
@@ -108,34 +138,30 @@ export function Editor({ projectId }: { projectId: string }) {
     );
   }
 
+  const serverOk = health.status !== "down";
   const selectedSource = project.sources.find((s) => s.id === selectedSourceId) ?? null;
   const editingClip = project.clips.find((c) => c.id === editingClipId) ?? null;
   const markerSource = editingClip ? project.sources.find((s) => s.id === editingClip.sourceId) ?? null : selectedSource;
 
+  // hook clips go after the last hook clip so hooks stay grouped at the top
   const addClip = (draft: ClipDraft) => {
     if (!selectedSource) return;
     const clip: Clip = { id: generateId("clip", 8), sourceId: selectedSource.id, ...draft };
-    update((p) => {
-      // hook clips go after the last hook clip so hooks stay grouped at the top
-      if (clip.slot === "hook") {
-        const last = p.clips.map((c) => c.slot).lastIndexOf("hook");
-        const clips = p.clips.slice();
-        clips.splice(last + 1, 0, clip);
-        return { ...p, clips };
-      }
-      return { ...p, clips: [...p.clips, clip] };
-    });
+    update((p) => ({ ...p, clips: insertClip(p.clips, clip) }));
   };
 
   const addSource = async (path: string) => {
     const before = new Set(project.sources.map((s) => s.id));
-    const next = await mutateOnServer((p) => api.addSource(p.id, { path }));
+    // pauseSaves: a PUT racing this request would drop the new source (§6.2)
+    const next = await mutateOnServer((p) => api.addSource(p.id, { path }), { pauseSaves: true });
     const added = next.sources.find((s) => !before.has(s.id));
     if (added) {
       setSelectedSourceId(added.id);
       setEditingClipId(null);
     }
   };
+
+  const analyzing = project.sources.some((s) => s.analysisStatus === "running");
 
   return (
     <div className="editor">
@@ -156,6 +182,11 @@ export function Editor({ projectId }: { projectId: string }) {
         </div>
         <SavePill state={saveState} error={saveError} onRetry={() => void flush()} />
         <div className="topbar-right">
+          {needsPoll ? (
+            <span className="pill pill-busy" title="プロキシ生成 / ハイライト解析を実行中">
+              <Spinner size={10} /> バックグラウンド処理中
+            </span>
+          ) : null}
           {health.status === "down" ? (
             <span className="pill pill-error">
               <span className="dot" /> サーバー未接続
@@ -184,50 +215,206 @@ export function Editor({ projectId }: { projectId: string }) {
       ) : null}
 
       <div className="workspace">
-        <aside className="pane pane-left">
-          <SourcesPanel
-            project={project}
-            selectedId={editingClip ? editingClip.sourceId : selectedSourceId}
-            onSelect={(id) => {
-              setSelectedSourceId(id);
-              setEditingClipId(null);
+        <aside className="pane pane-left pane-tabbed">
+          <Tabs<LeftTab>
+            ariaLabel="編集パネル"
+            value={leftTab}
+            onChange={(t) => {
+              setLeftTab(t);
+              if (t !== "media") setEditingClipId(null);
             }}
-            onAdd={addSource}
-            disabled={health.status === "down"}
+            options={[
+              { value: "media", label: "素材・クリップ", badge: project.clips.length || null },
+              {
+                value: "cands",
+                label: "候補",
+                badge: analyzing ? <Spinner size={8} /> : project.candidates.length || null,
+              },
+              { value: "script", label: "台本", badge: scriptBadge(project, lang) },
+            ]}
           />
-          {markerSource ? (
-            <ClipMarker
-              project={project}
-              source={markerSource}
-              editingClip={editingClip}
-              editingIndex={editingClip ? project.clips.filter((c) => c.slot === editingClip.slot).indexOf(editingClip) : -1}
-              onAdd={addClip}
-              onUpdate={updateClip}
-              onDoneEditing={() => setEditingClipId(null)}
-            />
-          ) : null}
-          <ClipList
-            project={project}
-            editingId={editingClipId}
-            onEdit={(c) => {
-              setEditingClipId(c.id);
-              setSelectedSourceId(c.sourceId);
-            }}
-            onChangeClips={(clips) => {
-              if (editingClipId && !clips.some((c) => c.id === editingClipId)) setEditingClipId(null);
-              update((p) => ({ ...p, clips }));
-            }}
-          />
+          <div className="pane-scroll">
+            {leftTab === "media" ? (
+              <>
+                <SourcesPanel
+                  project={project}
+                  selectedId={editingClip ? editingClip.sourceId : selectedSourceId}
+                  onSelect={(id) => {
+                    setSelectedSourceId(id);
+                    setEditingClipId(null);
+                  }}
+                  onAdd={addSource}
+                  onRemove={(id) => {
+                    if (editingClip?.sourceId === id) setEditingClipId(null);
+                    removeSource(id);
+                  }}
+                  disabled={!serverOk}
+                />
+                {markerSource ? (
+                  markerSource.proxyStatus === "ready" ? (
+                    <ClipMarker
+                      project={project}
+                      source={markerSource}
+                      editingClip={editingClip}
+                      editingIndex={editingClip ? project.clips.filter((c) => c.slot === editingClip.slot).indexOf(editingClip) : -1}
+                      onAdd={addClip}
+                      onUpdate={updateClip}
+                      onDoneEditing={() => setEditingClipId(null)}
+                    />
+                  ) : (
+                    <SourceNotReady source={markerSource} />
+                  )
+                ) : null}
+                <ClipList
+                  project={project}
+                  editingId={editingClipId}
+                  onEdit={(c) => {
+                    setEditingClipId(c.id);
+                    setSelectedSourceId(c.sourceId);
+                  }}
+                  onChangeClips={(clips) => {
+                    if (editingClipId && !clips.some((c) => c.id === editingClipId)) setEditingClipId(null);
+                    update((p) => ({ ...p, clips }));
+                  }}
+                />
+              </>
+            ) : leftTab === "cands" ? (
+              <>
+                {project.sources.length > 1 ? (
+                  <div className="src-picker">
+                    <span className="field-label">素材</span>
+                    <select
+                      className="input input-sm"
+                      value={selectedSourceId ?? ""}
+                      onChange={(e) => setSelectedSourceId(e.target.value)}
+                      aria-label="候補を表示する素材"
+                    >
+                      {project.sources.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {basename(s.originalPath)}
+                          {s.analysisStatus === "done"
+                            ? `(候補 ${project.candidates.filter((c) => c.sourceId === s.id).length})`
+                            : s.analysisStatus === "running"
+                              ? "(解析中)"
+                              : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+                {selectedSource ? (
+                  selectedSource.proxyStatus === "ready" ? (
+                    <div className="marker-sticky">
+                      <ClipMarker
+                        project={project}
+                        source={selectedSource}
+                        editingClip={null}
+                        editingIndex={-1}
+                        onAdd={addClip}
+                        onUpdate={updateClip}
+                        onDoneEditing={() => {}}
+                        compact
+                        cue={cue}
+                        marks={project.candidates
+                          .filter((c) => c.sourceId === selectedSource.id)
+                          .map((c) => ({ id: c.id, inSec: c.startSec, outSec: c.endSec, active: c.id === (hoverCandId ?? activeCandId) }))}
+                      />
+                    </div>
+                  ) : (
+                    <SourceNotReady source={selectedSource} />
+                  )
+                ) : null}
+                <CandidatesPanel
+                  project={project}
+                  source={selectedSource}
+                  update={update}
+                  mutateOnServer={mutateOnServer}
+                  activeCandidateId={activeCandId}
+                  onCue={(c) => {
+                    if (!c) {
+                      setHoverCandId(null);
+                      setCue((cur) => (cur && cur.mode === "hover" ? null : cur));
+                      return;
+                    }
+                    const { candId, ...rest } = c;
+                    if (rest.mode === "select") {
+                      setActiveCandId(candId);
+                      setHoverCandId(null);
+                    } else setHoverCandId(candId);
+                    setCue((cur) => ({ ...rest, n: (cur?.n ?? 0) + 1 }));
+                  }}
+                  onShowClips={() => {
+                    setLeftTab("media");
+                    window.setTimeout(() => document.querySelector(".clips-section")?.scrollIntoView({ block: "start" }), 50);
+                  }}
+                  serverOk={serverOk}
+                />
+              </>
+            ) : (
+              <ScriptEditor
+                project={project}
+                update={update}
+                mutateOnServer={mutateOnServer}
+                lang={lang}
+                setLang={setLang}
+                serverOk={serverOk}
+              />
+            )}
+          </div>
         </aside>
 
         <main className="pane pane-center">
           <PreviewPane project={project} format={format} lang={lang} />
-          <RenderPanel project={project} format={format} lang={lang} flush={flush} serverOk={health.status !== "down"} />
+          <RenderPanel project={project} format={format} lang={lang} flush={flush} serverOk={serverOk} />
         </main>
 
-        <aside className="pane pane-right">
-          <Inspector project={project} update={update} format={format} setFormat={setFormat} lang={lang} setLang={setLang} />
+        <aside className="pane pane-right pane-tabbed">
+          <Tabs<RightTab>
+            ariaLabel="設定パネル"
+            value={rightTab}
+            onChange={setRightTab}
+            options={[
+              { value: "settings", label: "設定" },
+              { value: "audio", label: "音声", badge: project.audio.bgm ? "BGM" : null },
+              { value: "style", label: "スタイル" },
+            ]}
+          />
+          <div className="pane-scroll">
+            {rightTab === "settings" ? (
+              <Inspector project={project} update={update} format={format} setFormat={setFormat} lang={lang} setLang={setLang} />
+            ) : rightTab === "audio" ? (
+              <AudioPanel project={project} update={update} />
+            ) : (
+              <StylePanel project={project} update={update} />
+            )}
+          </div>
         </aside>
+      </div>
+    </div>
+  );
+}
+
+function scriptBadge(project: Project, lang: Lang) {
+  const n = project.script.filter((l) => l.lang === lang && l.text.trim() && l.status !== "ok").length;
+  return n > 0 ? (
+    <span className="tab-badge-warn" title="未生成・要再生成の行">
+      {n}
+    </span>
+  ) : null;
+}
+
+function SourceNotReady({ source }: { source: Source }) {
+  const pending = source.proxyStatus === "pending";
+  return (
+    <div className={cx("src-wait", !pending && "is-error")}>
+      {pending ? <Spinner size={18} /> : <Icon.Alert size={18} />}
+      <div>
+        <div className="src-wait-title">{pending ? "プレビュー用プロキシを生成中…" : "プロキシの生成に失敗しました"}</div>
+        <div className={cx("field-hint", !pending && "mono")}>
+          {pending
+            ? `${basename(source.originalPath)}(${Math.round(source.durationSec)} 秒)。完了すると自動で表示されます。`
+            : source.proxyError ?? "不明なエラー"}
+        </div>
       </div>
     </div>
   );

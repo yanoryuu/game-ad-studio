@@ -21,6 +21,23 @@ Remotion を使った、PC インディーゲーム向け広告動画の半自�
 | 言語 | 日本語 + 英語。台本・字幕は言語ごとに持ち、言語別に書き出す。TTS は日本語=VOICEVOX、英語=Piper(ローカル) |
 | fps | 既定 30fps、60fps も選択可 |
 
+### Phase 2 での追加決定
+
+| 項目 | 決定 |
+|---|---|
+| project.json | schemaVersion 2。読み込み時に `migrateProject` で v1 → v2 を自動変換(詳細は ARCHITECTURE §4) |
+| ソース取り込み | 登録は即時に返し、プロキシ生成はバックグラウンド(`proxyStatus`: pending → ready / error)。UI はポーリング |
+| ハイライト候補 | ソースごとに解析ボタン → 2〜6 秒の候補(score と scene/motion/loudness 特徴量、サムネ付き)→ 採用で clip 化 |
+| 台本 | 言語 × セクション(hook/main/cta)ごとに複数行。行ごとに声・速度・オフセット。text/voice を変えたら stale |
+| 日本語 TTS | VOICEVOX ENGINE(`D:Toolsoicevox`、既定 ずんだもん ノーマル = style 3)。字幕タイミングは audio_query のモーラ長 |
+| 英語 TTS | Piper(`D:Toolspiper`、既定 en_US-lessac-medium)+ whisper.cpp(base.en)で単語タイミング |
+| クレジット | VOICEVOX の声を使ったら「VOICEVOX:キャラ名」を表示(行ごとに `credit` を保存し UI で一覧表示) |
+| ナレーション配置 | hook/cta はセクション開始 + オフセット、main は順番に連続。尺「自由」ならセクションが伸び、固定尺なら溢れた分を切って UI で警告 |
+| BGM | アップロード(mp3/wav/m4a/ogg/aac)、ループ可、末尾フェードアウト、ナレーション中は duckingDb 下げる |
+| ゲーム音 | ナレーション中は `gameVolumeUnderNarration` 倍に下げる |
+| Phase 1 の修正 | 発売情報を言語別に / ウォーターマーク位置を選択可(none 含む、既定 右上)/ 字幕スタイル(on/off・位置・サイズ) |
+| ツール設定 | `gas.config.json`(任意)で VOICEVOX URL・run.exe、Piper、whisper の場所を上書き |
+
 ## 2. 全体の流れ
 
 ```
@@ -76,7 +93,7 @@ game-ad-studio/
 - 状態はすべて `project.json` に保存(DB は使わない)。素材はサーバーが HTTP で配信する。
 - 外部の常駐プロセス: VOICEVOX エンジン(別途インストール)。whisper.cpp は `@remotion/install-whisper-cpp` で導入。
 
-### project.json(概略)
+### project.json(概略 — Phase 1 時点の案。現行の正確な形は ARCHITECTURE.md §4)
 ```ts
 {
   id, name, template: "hook-play-cta" | "features" | "trailer",

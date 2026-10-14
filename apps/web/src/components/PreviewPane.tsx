@@ -1,17 +1,14 @@
 import { Component, useMemo, type ReactNode } from "react";
 import { Player } from "@remotion/player";
 import type { Format, Lang, Project } from "@gas/shared";
-import { AdVideo, calcAdMetadata, type AdVideoProps } from "@gas/compositions";
+import { AdVideo, calcAdMetadata, getSectionDurations, type AdVideoProps } from "@gas/compositions";
 import { useElementSize } from "../hooks/useElementSize";
 import { formatSec } from "../util";
 import { Icon } from "./ui";
 
-const HOOK_SEC = 2.5;
-const END_SEC = 3;
-
 export function PreviewPane(props: { project: Project; format: Format; lang: Lang }) {
   const { project, format, lang } = props;
-  const meta = useMemo(() => calcAdMetadata(project, format), [project, format]);
+  const meta = useMemo(() => calcAdMetadata(project, format, lang), [project, format, lang]);
   const inputProps = useMemo<AdVideoProps>(
     () => ({ project, format, lang, assetBaseUrl: "", useProxy: true }),
     [project, format, lang],
@@ -27,8 +24,11 @@ export function PreviewPane(props: { project: Project; format: Format; lang: Lan
     w = h * ar;
   }
 
-  const totalSec = meta.durationInFrames / meta.fps;
-  const mainSec = Math.max(0, totalSec - HOOK_SEC - END_SEC);
+  // Hook / end card stretch to fit their narration (docs/ARCHITECTURE.md §5.1).
+  const { hookSec, mainSec, endSec, totalSec } = useMemo(
+    () => getSectionDurations(project, lang),
+    [project, lang],
+  );
 
   return (
     <div className="preview">
@@ -58,14 +58,14 @@ export function PreviewPane(props: { project: Project; format: Format; lang: Lan
       </div>
       <div className="structure" aria-label="構成">
         <div className="structure-bar">
-          <span className="st st-hook" style={{ flexGrow: HOOK_SEC }}>
-            <b>フック</b> {formatSec(HOOK_SEC)}
+          <span className="st st-hook" style={{ flexGrow: hookSec }}>
+            <b>フック</b> {formatSec(hookSec)}
           </span>
           <span className="st st-main" style={{ flexGrow: Math.max(mainSec, 1.5) }}>
             <b>本編</b> {formatSec(mainSec)}
           </span>
-          <span className="st st-end" style={{ flexGrow: END_SEC }}>
-            <b>エンド</b> {formatSec(END_SEC)}
+          <span className="st st-end" style={{ flexGrow: endSec }}>
+            <b>エンド</b> {formatSec(endSec)}
           </span>
         </div>
         <div className="structure-meta mono">

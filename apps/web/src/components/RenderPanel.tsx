@@ -1,6 +1,7 @@
-import type { Format, Lang, Project, RenderStatus } from "@gas/shared";
+import { type Format, type Lang, type Project, type RenderStatus } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import { useRenderJob } from "../hooks/useRenderJob";
+import { useRequiredCredits } from "../hooks/useTts";
 import { cx } from "../util";
 import { Icon, Spinner } from "./ui";
 
@@ -25,6 +26,8 @@ export function RenderPanel(props: {
   const noClips = project.clips.length === 0;
   const pct = job ? Math.round(job.progress * 100) : 0;
   const outUrl = job?.outputPath ? assetUrl("", project.id, job.outputPath) : null;
+  const credits = useRequiredCredits(project, lang);
+  const unsynth = project.script.filter((l) => l.lang === lang && l.text.trim() && l.status !== "ok").length;
 
   const start = () => void r.start({ format, lang, fps: project.fps }, props.flush);
 
@@ -49,6 +52,33 @@ export function RenderPanel(props: {
       </div>
 
       {noClips && !job ? <div className="field-hint">クリップを追加すると書き出せます。</div> : null}
+
+      {unsynth > 0 || credits.length > 0 ? (
+        <div className="render-notes">
+          {unsynth > 0 ? (
+            <div className="render-note warn">
+              <Icon.Alert size={13} />
+              <span>
+                未生成・要再生成のナレーションが {unsynth} 行あります(未生成は無音、要再生成は古い音声のまま書き出されます)。
+              </span>
+            </div>
+          ) : null}
+          {credits.length > 0 ? (
+            <div className="render-note credit">
+              <Icon.Mic size={13} />
+              <span>
+                {credits.map((c, i) => (
+                  <span key={c}>
+                    {i > 0 ? "、" : ""}
+                    <b className="mono">{c}</b>
+                  </span>
+                ))}{" "}
+                をクレジット表記してください(動画内または説明欄)。
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {job && job.status !== "done" && job.status !== "error" && !r.error ? (
         <div className="render-progress">

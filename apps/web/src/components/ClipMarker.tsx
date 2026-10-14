@@ -6,6 +6,14 @@ import { Icon, Segmented } from "./ui";
 
 export type ClipDraft = Pick<Clip, "inSec" | "outSec" | "slot" | "gameVolume">;
 
+/**
+ * External request to preview a range (e.g. hovering a highlight candidate).
+ * A new `n` triggers it. "hover": muted preview; "select": also loads the range into IN/OUT and plays with sound.
+ */
+export type MarkerCue = { n: number; inSec: number; outSec: number; mode: "hover" | "select" };
+/** Extra ranges drawn on the scrub bar (candidates). */
+export type MarkerMark = { id: string; inSec: number; outSec: number; active?: boolean };
+
 const MIN_LEN = 0.2;
 const DEFAULT_LEN = 3;
 const STEP = 1 / 30;
@@ -18,6 +26,10 @@ export function ClipMarker(props: {
   onAdd: (draft: ClipDraft) => void;
   onUpdate: (clipId: string, patch: Partial<ClipDraft>) => void;
   onDoneEditing: () => void;
+  cue?: MarkerCue | null;
+  marks?: MarkerMark[];
+  /** video + scrub + transport only (candidate browsing) */
+  compact?: boolean;
 }) {
   const { project, source, editingClip } = props;
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -87,6 +99,43 @@ export function ClipMarker(props: {
   }, [playing]);
 
   const { onUpdate } = props;
+
+  // External preview cue (candidate hover / click).
+  const pendingCueRef = useRef<MarkerCue | null>(null);
+  const hoverPlayingRef = useRef(false);
+  const applyCue = useCallback((c: MarkerCue) => {
+    const v = videoRef.current;
+    if (!v || v.readyState < 1) {
+      pendingCueRef.current = c;
+      return;
+    }
+    pendingCueRef.current = null;
+    v.muted = c.mode === "hover";
+    hoverPlayingRef.current = c.mode === "hover";
+    v.currentTime = c.inSec;
+    setTime(c.inSec);
+    stopAtRef.current = c.outSec;
+    void v.play().catch(() => {});
+  }, []);
+  const cue = props.cue ?? null;
+  const cueN = cue?.n ?? 0;
+  useEffect(() => {
+    if (!cue) {
+      // hover ended: stop the muted preview
+      const v = videoRef.current;
+      if (v && hoverPlayingRef.current) {
+        v.pause();
+        v.muted = false;
+        hoverPlayingRef.current = false;
+        stopAtRef.current = null;
+      }
+      pendingCueRef.current = null;
+      return;
+    }
+    if (cue.mode === "select" && !editingId) setDraft((d) => ({ ...d, inSec: round2(cue.inSec), outSec: round2(cue.outSec) }));
+    applyCue(cue);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cueN]);
   const change = useCallback(
     (patch: Partial<ClipDraft>) => {
       setDraft((d) => ({ ...d, ...patch }));
@@ -106,6 +155,8 @@ export function ClipMarker(props: {
     const v = videoRef.current;
     if (!v) return;
     stopAtRef.current = null;
+    v.muted = false;
+    hoverPlayingRef.current = false;
     if (v.paused) void v.play().catch(() => {});
     else v.pause();
   };
@@ -113,6 +164,8 @@ export function ClipMarker(props: {
   const playRange = () => {
     const v = videoRef.current;
     if (!v) return;
+    v.muted = false;
+    hoverPlayingRef.current = false;
     v.currentTime = draft.inSec;
     stopAtRef.current = draft.outSec;
     void v.play().catch(() => {});
@@ -166,7 +219,7 @@ export function ClipMarker(props: {
   const valid = len >= MIN_LEN && draft.outSec <= duration + 0.01;
 
   return (
-    <div className={cx("marker", editingClip && "is-editing")} tabIndex={0} onKeyDown={onKeyDown}>
+    <div className={cx("marker", editingClip && "is-editing", props.compact && "is-compact")} tabIndex={0} onKeyDown={onKeyDown}>
       <div className="marker-head">
         {editingClip ? (
           <>
@@ -200,6 +253,7 @@ export function ClipMarker(props: {
             e.currentTarget.volume = draft.gameVolume;
             setLoaded(true);
             if (editingClip) e.currentTarget.currentTime = editingClip.inSec;
+            if (pendingCueRef.current) applyCue(pendingCueRef.current);
           }}
           onPlay={() => setPlaying(true)}
           onPause={(e) => {
@@ -222,6 +276,13 @@ export function ClipMarker(props: {
       <div className="scrub" ref={barRef} onPointerDown={onBarDown} onPointerMove={onBarMove} role="slider"
         aria-label="再生位置" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={time}>
         <div className="scrub-track" />
+        {props.marks?.map((m) => (
+          <div
+            key={m.id}
+            className={cx("scrub-cand", m.active && "is-active")}
+            style={{ left: pct(m.inSec), width: `calc(${pct(m.outSec)} - ${pct(m.inSec)})` }}
+          />
+        ))}
         {others.map((c) => (
           <div
             key={c.id}
@@ -251,6 +312,21 @@ export function ClipMarker(props: {
         </button>
       </div>
 
+      {props.compact ? (
+        <div className="compact-range">
+          <span className="mono">
+            <span className="c-in">{formatTime(draft.inSec)}</span> – <span className="c-out">{formatTime(draft.outSec)}</span>{" "}
+            <span className="muted">{valid ? formatSec(len) : "—"}</span>
+          </span>
+          <button className="btn btn-sm ml-auto" disabled={!valid} onClick={() => props.onAdd({ ...draft, slot: "hook" })} title="この範囲をフックに追加">
+            <Icon.Plus size={12} /> フック
+          </button>
+          <button className="btn btn-sm" disabled={!valid} onClick={() => props.onAdd({ ...draft, slot: "main" })} title="この範囲を本編に追加">
+            <Icon.Plus size={12} /> 本編
+          </button>
+        </div>
+      ) : (
+      <>
       <div className="inout">
         <div className="inout-col">
           <button className="btn btn-sm btn-in" onClick={() => setIn(time)} title="現在位置を IN に (I)">
@@ -322,6 +398,8 @@ export function ClipMarker(props: {
         <div className="field-hint warn">OUT は IN より後にしてください</div>
       ) : null}
       <div className="field-hint">I / O で IN・OUT、Space で再生、← → でコマ送り(Shift で 1 秒)</div>
+      </>
+      )}
     </div>
   );
 }

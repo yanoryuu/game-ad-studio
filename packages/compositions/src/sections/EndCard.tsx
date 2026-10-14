@@ -1,6 +1,6 @@
 import type React from "react";
 import { AbsoluteFill, Img, interpolate, spring, useCurrentFrame, useVideoConfig } from "remotion";
-import type { Format, Lang, Project } from "@gas/shared";
+import { collectCredits, type Format, type Lang, type Project } from "@gas/shared";
 import { Backdrop } from "../Backdrop";
 import { assetUrl } from "../urls";
 import { BODY_FONT, displayFont } from "../fonts";
@@ -175,7 +175,7 @@ export const EndCard: React.FC<{
   const { fps, width, height } = useVideoConfig();
   const u = unitFor(width, height);
   const flash = interpolate(frame, [0, Math.round(fps * 0.2)], [0.7, 0], { extrapolateLeft: "clamp", extrapolateRight: "clamp" });
-  const release = project.game.releaseText.trim();
+  const release = project.game.releaseText[lang].trim();
   const cta = project.texts[lang].cta.trim();
   const rel = useEntrance(7);
 
@@ -215,7 +215,39 @@ export const EndCard: React.FC<{
         {cta ? <CtaButton text={cta} accent={project.style.accentColor} delay={13} /> : null}
         <PlatformRow platforms={project.game.platforms} delay={20} />
       </AbsoluteFill>
+      <VoiceCredits project={project} lang={lang} />
       {flash > 0 ? <AbsoluteFill style={{ backgroundColor: "white", opacity: flash }} /> : null}
     </AbsoluteFill>
+  );
+};
+
+/**
+ * Required voice credits (e.g. "VOICEVOX:ずんだもん", VOICEVOX terms of use): small, unobtrusive,
+ * bottom-right corner of the end card.
+ */
+const VoiceCredits: React.FC<{ project: Project; lang: Lang }> = ({ project, lang }) => {
+  const { width, height } = useVideoConfig();
+  const credits = collectCredits(project, lang);
+  if (credits.length === 0) return null;
+  const u = unitFor(width, height);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        right: 32 * u,
+        bottom: 24 * u,
+        maxWidth: width * 0.6,
+        textAlign: "right",
+        fontFamily: BODY_FONT,
+        fontWeight: 700,
+        fontSize: 22 * u,
+        lineHeight: 1.35,
+        color: "rgba(255,255,255,0.78)",
+        textShadow: "0 1px 4px rgba(0,0,0,0.9)",
+        letterSpacing: "0.03em",
+      }}
+    >
+      {credits.join(" / ")}
+    </div>
   );
 };
