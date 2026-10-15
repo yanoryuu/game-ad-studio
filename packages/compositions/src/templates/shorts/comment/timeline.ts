@@ -13,6 +13,7 @@ import {
   textOf,
   SE_GAIN,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -127,6 +128,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Commen
     morphFrames,
     answerSlamFrames,
     clips,
+    // §5.11 cut transitions (auto): zoom into the answer (switchAt), whip on the other cuts
+    transitionCuts: transitionCutsOf(cuts, "whip", body).map((c) => (c.frame === switchAt ? { ...c, auto: "zoom" as const } : c)),
     cuts: [...new Set(cuts)].filter((c) => c > 0 && c < body).sort((a, b) => a - b),
   };
 }

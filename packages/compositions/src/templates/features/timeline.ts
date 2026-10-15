@@ -2,6 +2,7 @@ import { assignFeatureClips, type FeatureItem, type Lang, type Project, type Scr
 import { fitSegments, MIN_CLIP_SEC, segLen, toSegments, type TimelineSection } from "../../common/clips";
 import { layoutNarration, placeSection, playableLines, toFrames, type PlacedNarration, type RelLine } from "../../common/narrationLayout";
 import { END_CARD_SEC, MAX_END_CARD_SEC } from "../hookPlayCta/timeline";
+import type { TransitionCut } from "../../common/transitions";
 import type { TemplateTimeline, TimelineSectionInfo } from "../types";
 
 /**
@@ -149,10 +150,18 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Featur
   }
   sections.push({ id: "end", kind: "end", label: "エンド", from: endCard.from, durationInFrames: endCard.durationInFrames });
 
+  // §5.11 cut transitions: clip changes INSIDE the intro / each feature / main only — the section boundaries keep
+  // their accent swipe (Features.tsx). auto = whip
+  const inner = (s: TimelineSection) => s.clips.map((c) => s.from + c.from).filter((f) => f > s.from && f < s.from + s.durationInFrames);
+  const transitionCuts: TransitionCut[] = [...new Set([...inner(intro), ...features.flatMap(inner), ...(main ? inner(main) : [])])]
+    .sort((a, b) => a - b)
+    .map((frame) => ({ frame, auto: "whip" }));
+
   return {
     fps,
     totalFrames,
     sections,
+    transitionCuts,
     intro,
     features,
     main,

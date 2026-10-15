@@ -15,6 +15,7 @@ import {
   textOf,
   MIN_CLIP_SEC,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -157,6 +158,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Payoff
     gauge: data.flag,
     payFrom,
     clips,
+    // §5.11 cut transitions (auto): whip through the accelerating build-up; NOT the payoff cut (own flash + zoom punch)
+    transitionCuts: transitionCutsOf(cuts, "whip", payFrom),
     cuts,
   };
 }

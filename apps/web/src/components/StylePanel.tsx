@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
-import { EMPHASIS_COLORS, isShortTemplate } from "@gas/shared";
-import type { CaptionStyle, Format, Project, Style, VerticalMode, Watermark, WatermarkPosition } from "@gas/shared";
+import { DEFAULT_TRANSITION_INTENSITY, EMPHASIS_COLORS, isShortTemplate } from "@gas/shared";
+import type { CaptionStyle, Format, Project, Style, TemplateId, TransitionPreset, VerticalMode, Watermark, WatermarkPosition } from "@gas/shared";
 import { assetUrl } from "@gas/compositions";
 import type { UpdateProject } from "../hooks/useProject";
 import { cx } from "../util";
@@ -11,6 +11,34 @@ const VERTICAL_MODES: { mode: VerticalMode; name: string; desc: string }[] = [
   { mode: "blur", name: "ぼかし背景", desc: "16:9 の映像全体を中央に、上下をぼかしで埋める" },
   { mode: "crop", name: "クロップ", desc: "縦いっぱいに切り抜く。位置はクリップごとに調整" },
 ];
+
+const TRANSITIONS: { value: TransitionPreset; label: string; title: string }[] = [
+  { value: "auto", label: "おまかせ", title: "テンプレートのおすすめ(カットごとに自動)" },
+  { value: "none", label: "なし", title: "普通のカット" },
+  { value: "whip", label: "ホイップ", title: "横に流れるモーションブラーで切り替え" },
+  { value: "zoom", label: "ズーム", title: "ズームで突っ込んで切り替え" },
+  { value: "glitch", label: "グリッチ", title: "RGB ずれ + 横ずれのノイズで切り替え" },
+  { value: "flash", label: "フラッシュ", title: "白く光って切り替え" },
+];
+
+/** what "おまかせ" does per template (keep in sync with the templates' transitionCuts, ARCHITECTURE §5.11) */
+const TRANSITION_AUTO: Record<TemplateId, string> = {
+  "hook-play-cta": "ホイップとズームを交互に",
+  features: "各魅力の中のカットにホイップ(魅力の切り替えは従来のスワイプ)",
+  trailer: "フラッシュ → グリッチ → ホイップ → ズームの順に(テロップ・ロゴの前後は従来の演出)",
+  intro: "ホイップ",
+  question: "ホイップとズームを交互に",
+  challenge: "ズーム",
+  "fail-win": "失敗パートはグリッチ、逆転パートはホイップ",
+  payoff: "溜めのカットにホイップ(爆発の瞬間は専用の演出)",
+  "before-after": "ホイップ(ビフォー → アフターの切り替えは専用のハードカット)",
+  devlog: "なし(素朴なカットのまま。効果を選べば適用)",
+  "dev-pitch": "ホイップとズームを交互に",
+  loop: "なし(ループのつなぎ目を優先。効果を選べば適用)",
+  list: "見出しはホイップ、各項目の映像はズーム",
+  comment: "ホイップ(回答への切り替えはズーム)",
+  trivia: "なし(参考動画どおりのハードカット。効果を選べば適用)",
+};
 
 const CORNERS: { pos: Exclude<WatermarkPosition, "none">; label: string }[] = [
   { pos: "top-left", label: "左上" },
@@ -33,6 +61,9 @@ export function StylePanel(props: {
   const setStyle = (patch: Partial<Style>) => update((p) => ({ ...p, style: { ...p.style, ...patch } }));
   const setWm = (patch: Partial<Watermark>) => setStyle({ watermark: { ...wm, ...patch } });
   const setCap = (patch: Partial<CaptionStyle>) => setStyle({ captions: { ...cap, ...patch } });
+  const tr = style.transition ?? { preset: "auto" as const };
+  const trIntensity = tr.intensity ?? DEFAULT_TRANSITION_INTENSITY;
+  const setTr = (patch: Partial<NonNullable<Style["transition"]>>) => setStyle({ transition: { preset: tr.preset, intensity: trIntensity, ...patch } });
 
   const logo = project.game.logo ? assetUrl("", project.id, project.game.logo) : null;
 
@@ -83,6 +114,32 @@ export function StylePanel(props: {
             <Icon.Crop size={13} /> 9:16 でプレビュー
           </button>
         ) : null}
+      </Section>
+
+      <Section title="トランジション">
+        <div className="tr-presets">
+          <Segmented<TransitionPreset>
+            size="sm"
+            value={tr.preset}
+            onChange={(preset) => setTr({ preset })}
+            ariaLabel="カットのトランジション"
+            options={TRANSITIONS.map((t) => ({ value: t.value, label: t.label, title: t.title }))}
+          />
+        </div>
+        <Slider
+          label="強さ"
+          value={trIntensity}
+          min={0}
+          max={1}
+          step={0.05}
+          format={(v) => `${Math.round(v * 100)}%`}
+          onChange={(intensity) => setTr({ intensity })}
+          disabled={tr.preset === "none"}
+        />
+        <div className="field-hint">
+          プレイ映像のカットの前後 0.3 秒ほどに効果をかけます(文字・字幕にはかかりません。クリップの長さは変わりません)。
+          {tr.preset === "auto" ? <> おまかせ: {TRANSITION_AUTO[project.template]}。</> : null}
+        </div>
       </Section>
 
       <Section title="配置プレビュー">

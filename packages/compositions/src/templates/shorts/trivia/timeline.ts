@@ -13,6 +13,7 @@ import {
   standardSeEvents,
   textOf,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 import { TRIVIA_FAMILY_NAME } from "./font";
 
@@ -152,6 +153,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Trivia
     sub: textOf(data.sub, lang),
     noEndCard,
     clips: lay.clips,
+    // §5.11 cut transitions (auto): none — hard cuts like the reference (an explicit preset still applies)
+    transitionCuts: transitionCutsOf(lay.cuts, "none", b.bodyFrames),
     cuts: lay.cuts,
   };
 }

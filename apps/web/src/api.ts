@@ -144,6 +144,8 @@ export const api = {
   listRenders: (id: string) => request<RenderListResponse>("GET", `/api/projects/${encodeURIComponent(id)}/renders`),
   /** 202 Project (audio.bgm.analysisStatus "running"); 409 when there is no BGM / already running. */
   analyzeBgm: (id: string) => request<Project>("POST", `/api/projects/${encodeURIComponent(id)}/bgm/analyze`),
+  /** 202 Project (audio.bgm.voiceCarveStatus "running"): voice-band ducking copy (§5.3.1); 409 = no BGM / already running. */
+  carveBgm: (id: string) => request<Project>("POST", `/api/projects/${encodeURIComponent(id)}/bgm/carve`),
 
   /* ---- Phase 3.5: SE library (§6.12) ---- */
   listSe: () => request<SeListResponse>("GET", "/api/se"),

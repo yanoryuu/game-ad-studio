@@ -46,6 +46,7 @@ const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !
  *
  * v4 -> v5 (10 short-form templates):
  *  - templateData.shorts: added; every missing template entry gets createDefaultShortFormData(id)
+ *    (also run on v5 projects, so templates added later — e.g. "trivia" — get their defaults)
  */
 export function migrateProject(raw: unknown): Project {
   if (!isObj(raw)) throw new Error("project.json is not an object");
@@ -57,7 +58,8 @@ export function migrateProject(raw: unknown): Project {
   if (version < 2) p = v1ToV2(p);
   if (version < 3) p = v2ToV3(p);
   if (version < 4) p = v3ToV4(p);
-  if (version < 5) p = v4ToV5(p);
+  // also for v5: fills short templates added after a project was saved (e.g. "trivia"); idempotent
+  if (version <= 5) p = v4ToV5(p);
   return projectSchema.parse(p);
 }
 

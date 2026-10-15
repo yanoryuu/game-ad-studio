@@ -263,6 +263,13 @@ export type RenderListResponse = z.infer<typeof renderListResponseSchema>;
  */
 export type BgmAnalyzeStartResponse = Project;
 
+/**
+ * POST /api/projects/:id/bgm/carve (no body) — voice-band ducking (ARCHITECTURE §5.3.1)
+ * -> 202 Project (audio.bgm.voiceCarveStatus = "running"); poll GET until voiceCarvePath is set ("done") / "error".
+ * 409 if there is no audio.bgm or carving of the same file is already running.
+ */
+export type BgmCarveStartResponse = Project;
+
 /* ------------------------------------------------------------------ */
 /* Phase 3.5: SE library (ARCHITECTURE §6.12)                            */
 /* ------------------------------------------------------------------ */

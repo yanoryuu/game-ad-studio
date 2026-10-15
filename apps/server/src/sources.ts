@@ -282,7 +282,7 @@ export async function recoverInterruptedJobs(): Promise<void> {
     }
     const pending = p.sources.filter((s) => s.proxyStatus === "pending");
     const running = p.sources.filter((s) => s.analysisStatus === "running");
-    const bgmRunning = p.audio.bgm?.analysisStatus === "running";
+    const bgmRunning = p.audio.bgm?.analysisStatus === "running" || p.audio.bgm?.voiceCarveStatus === "running";
     if (running.length || bgmRunning) {
       await updateProject(id, (q) => {
         for (const s of q.sources) {
@@ -296,6 +296,8 @@ export async function recoverInterruptedJobs(): Promise<void> {
           q.audio.bgm.analysisStatus = "error";
           q.audio.bgm.analysisError = "Interrupted (server restarted)";
         }
+        // Voice carve (§5.3.1): forget the interrupted run (status absent) so the web starts it again.
+        if (q.audio.bgm?.voiceCarveStatus === "running") delete q.audio.bgm.voiceCarveStatus;
       }).catch(() => {});
     }
     for (const s0 of pending) {

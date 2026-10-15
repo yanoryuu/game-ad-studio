@@ -16,6 +16,7 @@ import {
   textOf,
   SE_GAIN,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -167,6 +168,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): FailWi
     noteSettle,
     clips,
     slow,
+    // §5.11 cut transitions (auto): glitch on the fail cuts, whip on the win cuts; not fail -> card -> win nor slow -> normal speed
+    transitionCuts: [...transitionCutsOf(failCuts, "glitch", failTo), ...transitionCutsOf(winCuts.filter((f) => f > speedFrom), "whip", body)],
     failCuts,
     winCuts,
   };

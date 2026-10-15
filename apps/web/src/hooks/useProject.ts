@@ -10,8 +10,16 @@ const RETRY_MS = 4000;
 /** Fields of a script line written by the server on synthesis. */
 const SYNTH_KEYS = ["audioPath", "durationSec", "captions", "status", "error", "credit", "warning"] as const;
 
-/** Server-owned fields of audio.bgm (beat analysis), valid only for the same bgm.path (§6.2). */
-const BGM_SERVER_KEYS = ["beats", "bpm", "analysisStatus", "analysisError"] as const;
+/** Server-owned fields of audio.bgm (beat analysis, voice carve §5.3.1), valid only for the same bgm.path (§6.2). */
+const BGM_SERVER_KEYS = [
+  "beats",
+  "bpm",
+  "analysisStatus",
+  "analysisError",
+  "voiceCarvePath",
+  "voiceCarveStatus",
+  "voiceCarveError",
+] as const;
 
 function mergeBgm(local: AudioSettings, server: AudioSettings): AudioSettings {
   const lb = local.bgm;

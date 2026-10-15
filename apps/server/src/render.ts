@@ -203,6 +203,12 @@ async function runJob(job: JobInternal): Promise<void> {
   const project: Project = { ...structuredClone(loaded), ...(job.fps ? { fps: job.fps } : {}) };
   checkSources(project);
   dropMissingSe(project);
+  // Voice-band ducking (§5.3.1): a missing carved file would 404 -> fall back to volume ducking.
+  const vc = project.audio.bgm?.voiceCarvePath;
+  if (vc && !fs.existsSync(path.join(projectDir(project.id), ...vc.split("/")))) {
+    console.warn(`[render] BGM voice-carved file not found (${vc}); using volume ducking`);
+    delete project.audio.bgm!.voiceCarvePath;
+  }
 
   job.status = "bundling";
   job.progress = 0;

@@ -16,6 +16,7 @@ import {
   textOf,
   SE_GAIN,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -142,6 +143,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Challe
     suspenseFrom,
     noteFrom,
     clips,
+    // §5.11 cut transitions (auto): zoom punches through the play cuts (none in the blackout / note part)
+    transitionCuts: transitionCutsOf(cuts, "zoom", body),
     cuts,
   };
 }

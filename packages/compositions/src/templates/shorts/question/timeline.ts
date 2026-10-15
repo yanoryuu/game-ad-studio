@@ -15,6 +15,7 @@ import {
   standardSeEvents,
   textOf,
   SE_GAIN,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -120,6 +121,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Questi
     slamFrames,
     morphFrames,
     clips: lay.clips,
+    // §5.11 cut transitions (auto): tempo cuts alternate whip / zoom
+    transitionCuts: transitionCutsOf(lay.cuts, ["whip", "zoom"], body),
     cuts: lay.cuts,
     poll,
   };

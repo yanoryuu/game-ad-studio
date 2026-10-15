@@ -3,6 +3,7 @@ import { AbsoluteFill, Easing, interpolate, useCurrentFrame, useVideoConfig } fr
 import type { Format, Project } from "@gas/shared";
 import { ClipTrack } from "../../common/ClipTrack";
 import { isVertical } from "../../common/theme";
+import { useCoveredCut } from "../../common/CutTransition";
 import type { TrailerElement } from "./timeline";
 
 type CutEl = Extract<TrailerElement, { type: "cut" }>;
@@ -36,7 +37,9 @@ export const TrailerCut: React.FC<{
   const frame = useCurrentFrame();
   const { fps, width, height, durationInFrames } = useVideoConfig();
   const vertical = isVertical(format);
-  const kind = entranceFor(el.cutNo, afterCard);
+  // §5.11: a cut with a cut transition drops its own entrance (the transition does that job)
+  const covered = useCoveredCut(el.from);
+  const kind: Entrance | null = covered ? null : entranceFor(el.cutNo, afterCard);
   const f = (sec: number) => Math.max(2, Math.round(sec * fps));
 
   // slow camera push (alternating in / out and drifting origin, so consecutive cuts feel different)
@@ -72,7 +75,7 @@ export const TrailerCut: React.FC<{
   } else if (kind === "pop") {
     exposure = interpolate(frame, [0, f(0.14)], [1.9, 1], clamp);
     entranceScale = interpolate(frame, [0, f(0.25)], [1.16, 1], { ...clamp, easing: Easing.out(Easing.cubic) });
-  } else {
+  } else if (kind === "fromBlack") {
     black = interpolate(frame, [0, f(0.25)], [1, 0], clamp);
   }
 

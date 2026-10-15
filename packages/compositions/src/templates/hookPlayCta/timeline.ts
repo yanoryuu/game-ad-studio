@@ -1,6 +1,7 @@
 import type { Lang, Project } from "@gas/shared";
 import { consumeFrames, fitSegments, MIN_CLIP_SEC, segLen, toSegments, type TimelineSection } from "../../common/clips";
 import { layoutNarration, placeSection } from "../../common/narrationLayout";
+import type { TransitionCut } from "../../common/transitions";
 import type { TemplateTimeline } from "../types";
 
 /**
@@ -72,8 +73,20 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): AdTime
     ...placeSection(narr.cta, "cta", endCard.from, endCard.durationInFrames, !free),
   ];
 
+  // §5.11 cut transitions: every clip change in hook + main incl. hook -> main (not into the end card);
+  // auto alternates whip / zoom (they replace the cut punch of ClipTrack there)
+  const cutFrames = [
+    ...hookClips.map((c) => hook.from + c.from).filter((f) => f > hook.from),
+    ...(hookClips.length > 0 && mainClips.length > 0 ? [main.from] : []),
+    ...mainClips.map((c) => main.from + c.from).filter((f) => f > main.from),
+  ].filter((f) => f < endCard.from);
+  const transitionCuts: TransitionCut[] = [...new Set(cutFrames)]
+    .sort((a, b) => a - b)
+    .map((frame, i) => ({ frame, auto: i % 2 === 0 ? "whip" : "zoom" }));
+
   return {
     fps,
+    transitionCuts,
     totalFrames: hookFrames + mainFrames + endFrames,
     sections: [
       { id: "hook", kind: "hook", label: "フック", from: hook.from, durationInFrames: hook.durationInFrames },

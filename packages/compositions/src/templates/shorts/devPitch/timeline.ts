@@ -12,6 +12,7 @@ import {
   standardMarks,
   standardSeEvents,
   textOf,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -75,6 +76,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): DevPit
     handle: stripEmphasis(textOf(data.sub, lang)).trim(),
     cta: ctaText(project, lang),
     clips: lay.clips,
+    // §5.11 cut transitions (auto): short punchy cuts alternate whip / zoom
+    transitionCuts: transitionCutsOf(lay.cuts, ["whip", "zoom"], base.bodyFrames),
     cuts: lay.cuts,
   };
 }

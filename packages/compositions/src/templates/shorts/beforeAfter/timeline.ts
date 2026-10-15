@@ -16,6 +16,7 @@ import {
   standardSeEvents,
   textOf,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -144,6 +145,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Before
     switchAt,
     compareFrom,
     clips,
+    // §5.11 cut transitions (auto): whip on the soft cuts; the before -> after HARD cut (own 2-frame flash) and the compare split are left alone
+    transitionCuts: transitionCutsOf(cuts.filter((f) => f !== switchAt), "whip", compareFrom),
     cuts,
     compareBefore,
     compareAfter,

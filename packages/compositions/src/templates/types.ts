@@ -3,6 +3,7 @@ import type { Format, Lang, Project, TemplateId, VerticalMode } from "@gas/share
 import type { NarrationPlan } from "../common/narrationLayout";
 import type { SeEvent } from "../common/SeTrack";
 import type { CaptionBox, CaptionVariant } from "../common/Captions";
+import type { TransitionCut } from "../common/transitions";
 
 /**
  * Template module contract (docs/ARCHITECTURE.md §5.4). Every template lives in templates/<name>/ and
@@ -52,6 +53,13 @@ export type TemplateTimeline = {
    * SE_TEMPLATES (@gas/shared) may emit SE (collectCredits relies on that).
    */
   seEvents?: SeEvent[];
+  /**
+   * §5.11 cut transitions: absolute frames where the gameplay shot changes and a transition may play, each with the
+   * template's recommended effect for style.transition.preset "auto" ("none" = plain cut unless the user picks
+   * an effect). Templates leave out cuts that already have their own deliberate effect (section wipes, hard cuts
+   * by design, cuts into/out of cards / end card). Absent = no transitions.
+   */
+  transitionCuts?: TransitionCut[];
   /** v4: true -> <AdVideo> also plays the "captionPop" slot at the start of every caption chunk (§5.9) */
   captionPopSe?: boolean;
   /**

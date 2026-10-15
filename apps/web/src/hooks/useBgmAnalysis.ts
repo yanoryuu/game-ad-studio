@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bgm, Project } from "@gas/shared";
 import { api, ApiError, featureErrorMessage } from "../api";
 import type { MutateOnServer } from "./useProject";
@@ -22,6 +22,51 @@ export function beatState(bgm: Bgm | undefined): BeatState {
 /** True when the trailer's beat sync can use the BGM (§5.6: beats.length >= 2). */
 export function hasUsableBeats(project: Project): boolean {
   return (project.audio.bgm?.beats?.length ?? 0) >= 2;
+}
+
+/**
+ * Voice-band ducking (ARCHITECTURE §5.3.1): starts POST /bgm/carve automatically when the project has a BGM in
+ * band mode without a carved copy (new upload, project made before the feature, interrupted run). Once per
+ * BGM path per editor session (an error is shown with a retry button instead of looping).
+ */
+export function useBgmVoiceCarveAuto(project: Project | null, mutateOnServer: MutateOnServer, enabled: boolean) {
+  const tried = useRef(new Set<string>());
+  const bgm = project?.audio.bgm;
+  const want =
+    enabled &&
+    !!bgm &&
+    (bgm.duckMode ?? "band") === "band" &&
+    !bgm.voiceCarvePath &&
+    bgm.voiceCarveStatus !== "running" &&
+    bgm.voiceCarveStatus !== "error";
+  const key = project && bgm ? `${project.id}|${bgm.path}` : "";
+  useEffect(() => {
+    if (!want || !key || tried.current.has(key)) return;
+    tried.current.add(key);
+    void mutateOnServer((p) => api.carveBgm(p.id)).catch(() => {
+      /* 409 = already running; other errors: the next GET shows the state */
+    });
+  }, [want, key, mutateOnServer]);
+}
+
+/** Retry button for a failed voice carve. */
+export function useBgmCarve(mutateOnServer: MutateOnServer) {
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const start = useCallback(async () => {
+    setStarting(true);
+    setError(null);
+    try {
+      await mutateOnServer((p) => api.carveBgm(p.id));
+    } catch (e) {
+      setError(
+        e instanceof ApiError && e.status === 409 ? "BGM が無いか、すでに生成中です" : featureErrorMessage(e, "声の帯域カット"),
+      );
+    } finally {
+      setStarting(false);
+    }
+  }, [mutateOnServer]);
+  return { start, starting, error };
 }
 
 /** Starts POST /bgm/analyze (the editor polls GET while analysisStatus is "running"). */

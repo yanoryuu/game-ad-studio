@@ -7,6 +7,7 @@ import { isVertical, unitFor } from "./theme";
 import { BODY_FONT } from "./fonts";
 import { gameDuckGain } from "./audioMix";
 import { useDuckEnvelope } from "./mixContext";
+import { TransitionLayer, useCutTransition } from "./CutTransition";
 
 type ClipVideoProps = {
   project: Project;
@@ -181,8 +182,20 @@ export const ClipTrack: React.FC<{
   punchFirst: boolean;
 }> = ({ project, clips, format, assetBaseUrl, useProxy, sectionFrom, punchFirst }) => {
   const { fps } = useVideoConfig();
+  // §5.11 cut transitions: the footage layer gets the effect while one of these clips is on screen; a cut that
+  // has a transition skips the quick punch (the transition replaces it)
+  const tr = useCutTransition();
+  // absolute output frame (sectionFrom = absolute start of the enclosing Sequence, as for the ducking envelope)
+  const abs = useCurrentFrame() + sectionFrom;
+  const active =
+    !!tr &&
+    tr.schedule.length > 0 &&
+    clips.some((c) => {
+      const a = sectionFrom + c.from;
+      return abs >= a && abs < a + c.playFrames + c.holdFrames;
+    });
   return (
-    <>
+    <TransitionLayer active={active} absFrame={abs}>
       {clips.map((clip, i) => {
         const source = project.sources.find((s) => s.id === clip.sourceId);
         if (!source) return null;
@@ -194,7 +207,7 @@ export const ClipTrack: React.FC<{
             </Sequence>
           );
         }
-        const punch = i > 0 || punchFirst;
+        const punch = (i > 0 || punchFirst) && !(tr?.covered.has(sectionFrom + clip.from) ?? false);
         if (isStillImageSource(source)) {
           const motion = project.clips.find((c) => c.id === clip.clipId)?.imageMotion ?? DEFAULT_IMAGE_MOTION;
           return (
@@ -226,7 +239,7 @@ export const ClipTrack: React.FC<{
           </Sequence>
         );
       })}
-    </>
+    </TransitionLayer>
   );
 };
 

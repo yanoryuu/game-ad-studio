@@ -2444,6 +2444,19 @@ select.input option {
   height: 32px;
   color-scheme: dark;
 }
+/* voice-band ducking mode (§5.3.1): full-width, labels may wrap in a narrow panel */
+.bgm-duck-mode .seg {
+  display: flex;
+  width: 100%;
+}
+.bgm-duck-mode .seg-btn {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 26px;
+  padding: 4px 8px;
+  white-space: normal;
+  line-height: 1.3;
+}
 
 /* ---------- style ---------- */
 .mini-frame {
@@ -4480,4 +4493,10 @@ select.input option {
 }
 .bgm-sources li.warn {
   color: var(--warn);
+}
+
+/* transition presets (StylePanel): 6 options wrap in the narrow panel */
+.tr-presets .seg {
+  display: flex;
+  flex-wrap: wrap;
 }

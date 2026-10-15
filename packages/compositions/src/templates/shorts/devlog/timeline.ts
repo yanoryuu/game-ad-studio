@@ -14,6 +14,7 @@ import {
   standardSeEvents,
   textOf,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -125,6 +126,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Devlog
     settleFrames,
     outroFrom,
     clips: lay.clips,
+    // §5.11 cut transitions (auto): none — raw, calm jump cuts by design (an explicit preset still applies)
+    transitionCuts: transitionCutsOf(lay.cuts, "none", body),
     cuts: lay.cuts,
   };
 }

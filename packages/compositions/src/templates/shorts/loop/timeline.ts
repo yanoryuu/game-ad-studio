@@ -15,6 +15,7 @@ import {
   standardSeEvents,
   textOf,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -116,6 +117,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): LoopTi
     ctaFrom: base.ctaFrom,
     xfadeFrom,
     clips: lay.clips,
+    // §5.11 cut transitions (auto): none — tempo cuts + seamless loop crossfade; with an explicit preset, cuts near the seam are left out
+    transitionCuts: transitionCutsOf(lay.cuts, "none", xf > 0 ? xfadeFrom - sec(0.5, fps) : total),
     cuts: lay.cuts,
     seamClip,
   };

@@ -416,8 +416,25 @@ export const bgmSchema = z.object({
       url: z.string().max(500).optional(),
     })
     .optional(),
+  /**
+   * Voice-band ducking (ARCHITECTURE §5.3.1). "band" (default when absent): while narration plays, crossfade to
+   * the voice-carved copy (speech band cut) at half of duckingDb broadband; "volume": plain broadband duckingDb.
+   * "band" falls back to "volume" while voiceCarvePath is missing.
+   */
+  duckMode: z.enum(["band", "volume"]).optional(),
+  /**
+   * Server-owned (POST /bgm/carve, from-library): asset ref of the voice-carved copy of `path`
+   * (EQ cut on the speech band, same sample rate / length, e.g. "assets/xxxx-vcarve.flac").
+   * Only valid for the current `path` (the web drops it with beats when it replaces the file).
+   */
+  voiceCarvePath: assetRefSchema.optional(),
+  /** server-owned: voice-carve generation state; absent = "none" */
+  voiceCarveStatus: analysisStatusSchema.optional(),
+  /** server-owned: set only when voiceCarveStatus === "error" */
+  voiceCarveError: z.string().optional(),
 });
 export type Bgm = z.infer<typeof bgmSchema>;
+export type BgmDuckMode = NonNullable<Bgm["duckMode"]>;
 export type BgmLibraryRef = NonNullable<Bgm["library"]>;
 
 /**
@@ -525,6 +542,26 @@ export const verticalStyleSchema = z.object({
 });
 export type VerticalStyle = z.infer<typeof verticalStyleSchema>;
 
+/**
+ * Cut transitions (ARCHITECTURE §5.11): an effect on the footage around every gameplay cut (the outgoing shot's
+ * last frames + the incoming shot's first frames; clip timing is never changed). "auto" = the template's own
+ * recommendation per cut (may be "none"); "none" = plain cuts (the pre-transition look).
+ */
+export const TRANSITION_PRESETS = ["auto", "none", "whip", "zoom", "glitch", "flash"] as const;
+export const transitionPresetSchema = z.enum(TRANSITION_PRESETS);
+export type TransitionPreset = z.infer<typeof transitionPresetSchema>;
+/** a concrete effect (what "auto" resolves to per cut) */
+export type TransitionKind = Exclude<TransitionPreset, "auto">;
+/** intensity used when style.transition.intensity is absent */
+export const DEFAULT_TRANSITION_INTENSITY = 0.6;
+
+export const transitionStyleSchema = z.object({
+  preset: transitionPresetSchema,
+  /** 0..1 strength (displacement / blur / flash amount). Absent = DEFAULT_TRANSITION_INTENSITY */
+  intensity: z.number().min(0).max(1).optional(),
+});
+export type TransitionStyle = z.infer<typeof transitionStyleSchema>;
+
 export const styleSchema = z.object({
   /** CSS color, e.g. "#ff3b30" */
   primaryColor: z.string(),
@@ -541,6 +578,8 @@ export const styleSchema = z.object({
    * the UI also offers EMPHASIS_COLORS.red).
    */
   emphasisColor: z.string(),
+  /** cut transitions (optional, no schema bump; absent = { preset: "auto" }). §5.11 */
+  transition: transitionStyleSchema.optional(),
 });
 export type Style = z.infer<typeof styleSchema>;
 
@@ -813,6 +852,7 @@ export const DEFAULT_STYLE: Style = {
   captions: { enabled: true, position: "bottom", size: "m" },
   vertical: { mode: "blur" },
   emphasisColor: "#FFE14D",
+  transition: { preset: "auto", intensity: DEFAULT_TRANSITION_INTENSITY },
 };
 
 /** Defaults of templateData (deterministic ids, so repeated in-memory migrations of the same file agree). */

@@ -169,6 +169,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
  *    status, error, credit, v3 warning) is kept. sameVoice() includes voice.sourcePath (recorded lines).
  *  - v3 audio.bgm: beats / bpm / analysisStatus / analysisError always come from `stored` when both have a BGM
  *    with the same `path`; otherwise (BGM replaced or new) the body's values are dropped (stale).
+ *    Same for voiceCarvePath / voiceCarveStatus / voiceCarveError (voice-band ducking, §5.3.1).
  */
 export function mergeServerOwned(stored: Project, body: Project): Project {
   const storedSources = new Map(stored.sources.map((s) => [s.id, s]));
@@ -203,7 +204,16 @@ export function mergeServerOwned(stored: Project, body: Project): Project {
   });
   let audio = body.audio;
   if (body.audio.bgm) {
-    const { beats: _b, bpm: _p, analysisStatus: _s, analysisError: _e, ...bgm } = body.audio.bgm;
+    const {
+      beats: _b,
+      bpm: _p,
+      analysisStatus: _s,
+      analysisError: _e,
+      voiceCarvePath: _vp,
+      voiceCarveStatus: _vs,
+      voiceCarveError: _ve,
+      ...bgm
+    } = body.audio.bgm;
     const st = stored.audio.bgm;
     const owned =
       st && st.path === bgm.path
@@ -212,6 +222,10 @@ export function mergeServerOwned(stored: Project, body: Project): Project {
             ...(st.bpm ? { bpm: st.bpm } : {}),
             ...(st.analysisStatus ? { analysisStatus: st.analysisStatus } : {}),
             ...(st.analysisError ? { analysisError: st.analysisError } : {}),
+            // voice-band ducking (§5.3.1): same rule as the beat analysis
+            ...(st.voiceCarvePath ? { voiceCarvePath: st.voiceCarvePath } : {}),
+            ...(st.voiceCarveStatus ? { voiceCarveStatus: st.voiceCarveStatus } : {}),
+            ...(st.voiceCarveError ? { voiceCarveError: st.voiceCarveError } : {}),
           }
         : {};
     audio = { ...body.audio, bgm: { ...bgm, ...owned } };

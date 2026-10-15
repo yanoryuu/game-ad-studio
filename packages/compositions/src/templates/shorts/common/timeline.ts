@@ -1,4 +1,5 @@
-import { trailerClipOrder, type Lang, type Project, type VerticalMode } from "@gas/shared";
+import { trailerClipOrder, type Lang, type Project, type TransitionKind, type VerticalMode } from "@gas/shared";
+import type { TransitionCut } from "../../../common/transitions";
 import { fitSegments, MIN_CLIP_SEC, segLen, toSegments, type PlacedClip, type Segment } from "../../../common/clips";
 import { placeSection, playableLines, toFrames, type PlacedNarration, type RelLine } from "../../../common/narrationLayout";
 import type { SeEvent } from "../../../common/SeTrack";
@@ -413,4 +414,17 @@ export function shortTimelineFields(
     captionPopSe: o.captionPopSe ?? true,
     captionLayout: o.captionLayout,
   };
+}
+
+/**
+ * §5.11 cut transitions: cut frames -> TemplateTimeline.transitionCuts with the template's "auto" effect. `auto` is
+ * one effect or a list cycled by cut order. Frames outside (0, before) are dropped (pass the end-card start / a
+ * window the template keeps for its own effect), duplicates merged.
+ */
+export function transitionCutsOf(cuts: number[], auto: TransitionKind | readonly TransitionKind[], before = Infinity): TransitionCut[] {
+  const list = typeof auto === "string" ? [auto] : auto;
+  return [...new Set(cuts)]
+    .filter((f) => f > 0 && f < before)
+    .sort((a, b) => a - b)
+    .map((frame, i) => ({ frame, auto: list[i % Math.max(1, list.length)] ?? "none" }));
 }

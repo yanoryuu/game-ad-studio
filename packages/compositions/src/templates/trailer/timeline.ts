@@ -1,5 +1,6 @@
 import { trailerClipOrder, type Lang, type Project, type TrailerCard } from "@gas/shared";
 import { toSegments, type PlacedClip, type Segment } from "../../common/clips";
+import type { TransitionCut } from "../../common/transitions";
 import { layoutNarration, placeSection } from "../../common/narrationLayout";
 import { END_CARD_SEC, MAX_END_CARD_SEC } from "../hookPlayCta/timeline";
 import type { TemplateTimeline, TimelineSectionInfo } from "../types";
@@ -476,11 +477,22 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): Traile
     ...placeSection(narr.cta, "cta", endCard.from, endCard.durationInFrames, fixed),
   ];
 
+  // §5.11 cut transitions: only cut -> cut (cards / logo / end card have their own entrances); auto rotates
+  // flash / glitch / whip / zoom (replaces the built-in entrance of those cuts, see Cut.tsx)
+  const TRAILER_AUTO = ["flash", "glitch", "whip", "zoom"] as const;
+  const transitionCuts: TransitionCut[] = [];
+  elements.forEach((el, i) => {
+    if (i > 0 && el.type === "cut" && elements[i - 1]!.type === "cut") {
+      transitionCuts.push({ frame: el.from, auto: TRAILER_AUTO[transitionCuts.length % TRAILER_AUTO.length]! });
+    }
+  });
+
   return {
     fps,
     totalFrames,
     sections,
     narration: { lines, overflowLineIds: lines.filter((l) => l.cut).map((l) => l.lineId) },
+    transitionCuts,
     elements,
     logo,
     endCard,

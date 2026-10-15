@@ -422,6 +422,30 @@ hook-play-cta では `featureId` は無視(普通の main 行)。
 - 音量は Remotion の `volume` コールバック(フレーム関数)で実装する。
 - [v4] **効果音**: 音量 `audio.se.volume × イベントの gain`。ダッキングしない(ナレーション・BGM・ゲーム音の計算にも影響しない)。§5.9。
 
+#### 5.3.1 声の帯域ダッキング(BGM、`bgm.duckMode`)
+全体の音量を下げる代わりに、ナレーション中は「声の帯域を削った BGM」に切り替える(HeyGen HyperFrames の発想)。低音(キック・ベース)と高音は残り、声は聞き取りやすい。
+- スキーマ(schemaVersion は据え置き、すべて任意): `bgm.duckMode: "band" | "volume"`(**無し = "band"**)、
+  server-owned の `voiceCarvePath`(現在の `path` に対してだけ有効)/ `voiceCarveStatus`(analysisStatus と同じ enum)/ `voiceCarveError`。
+  PUT のマージは beats と同じ規則(§6.2: path が同じなら保存済みの値、違えば body の値を捨てる)。web は BGM 差し替え時にこれらを持ち越さない(duckMode は引き継ぐ)。
+- 生成(server、`bgm/voiceCarve.ts`): `<projectDir>/assets/<元の名前>-vcarve.flac` を ffmpeg で作る。EQ = ピーキング 3 段
+  `equalizer=f=550:t=q:w=0.9:g=-5, f=1700:w=0.9:g=-10, f=3000:w=1.6:g=-4`
+  (実測: 150 Hz -0.6 dB / 300 Hz -2.6 / 500 Hz -6.2 / 1 kHz -7.3 / 1.5–2 kHz -10.9 / 3 kHz -8.8 / 4 kHz -4.7 / 6 kHz -1.6 / 8 kHz -0.8)。
+  IIR は遅延なし、出力は可逆 FLAC(s16、エンコーダ遅延・パディング無し)なので **サンプルレート・ch 数・サンプル数が元と同じでサンプル単位で揃う**
+  (mp3/m4a で書き出さない理由)。一時ファイル → rename。
+- API: `POST /api/projects/:id/bgm/carve`(body なし)→ **202 Project**(`voiceCarveStatus: "running"`)、バックグラウンドで生成し、
+  完了時にその時点の `bgm.path` が同じなら `voiceCarvePath` + `"done"`(失敗は `"error"` + `voiceCarveError`、path が変わっていたら何もしない)。
+  409: BGM 無し / 同じファイルを生成中。`from-library`(§6.14)は取り込み時に自動で開始する。
+  起動時リカバリ: `"running"` のまま残っていたら status を消す(web が自動で再開する)。
+- web: エディタ(`useBgmVoiceCarveAuto`)が「BGM あり・band・voiceCarvePath 無し・status が running/error でない」とき自動で POST する
+  (直接アップロード・既存プロジェクト・中断のすべてをカバー。同じ path につきセッション 1 回、エラー時は音声タブの「再生成」)。running の間は GET をポーリング。
+  音声タブ: 「ダッキング方式: 声の帯域だけ下げる(おすすめ) / 全体の音量を下げる」+ 生成中 / エラー表示。
+- 合成(`common/Bgm.tsx`、`audioMix.ts` の `bgmBandDuckGains`): band かつ `voiceCarvePath` あり かつ `duckingDb < 0` のとき、
+  元と carved の 2 本の `<Audio>` を同じ loop / フェードで同時再生し、ダッキングエンベロープ env でクロスフェード:
+  元 = `base × (1 − env)`、carved = `base × env × 10^(duckingDb × 0.5 / 20)`(`BAND_DUCK_BROADBAND_RATIO = 0.5`)。
+  既定 -12 dB なら声の帯域は約 -16 dB、低音・高音は -6 dB(volume モードは全帯域 -12 dB)。
+  それ以外(volume / carved 未生成 / duckingDb 0)は従来の 1 本。render.ts は carved ファイルが無ければ voiceCarvePath を外して書き出す(volume にフォールバック)。
+- ゲーム音のダッキングは従来どおり(変更なし)。
+
 ### 5.4 テンプレートモジュールとレジストリ [v3]
 
 ```ts
@@ -653,6 +677,41 @@ gain は担当の裁量(例: transition 0.7)。同じフレーム・同じスロ
 | `list` 〇〇選 | 0 秒: title(見出し)を大きく(hook クリップ背景)。各項目: 番号カード(「1」「2」…、flag なら「第 N 位」→ 第 1 位の順)~0.6 秒 → main クリップ(項目順に 1 本ずつ、足りなければ繰り返し)+ 上部に番号付き項目テキスト。ナレーションがあれば main 行 k を項目 k に合わせる(行数 = 項目数のとき行の開始で項目を切り替え)→ エンド |
 | `trivia` 雑学ストーリー | 参考: YouTube Shorts「本家なのに本家だと証明しなきゃいけないゲーム」(ゲーム雑学の勇者、162 万再生)。**白背景**の 9:16。y≈270–480 に 2 行見出し(1 行目 = 赤い箱に白い極太文字、2 行目 = 白地に黒の極太文字、字間広め)を全編固定。y≈488–1432 に映像窓(横幅いっぱい・約 8:7、映像は cover で中央切り出し、focusX を使う)。その下 y≈1500 に**黒文字・縁取りなし**の字幕(1 チャンクずつ、ナレーションに同期)。映像は台本の行ごと(長い行は ~1.2 秒ごと)にテンポよく切替、静止画も混ぜる前提。sub があれば映像窓の下端付近に小さく。flag(既定 on)= エンドカード無しで最後まで同じ画面(cta 行は無視しない: 本文の最後に続けて再生)、off = 通常のエンドカード。16:9: 白背景に左右 2 カラム(左に見出し+字幕、右に映像)など破綻しない形。 |
 | `comment` コメント返信 | 0 秒: TikTok の返信ステッカー風の吹き出し(sub の投稿者名 + title のコメント)が hook クリップの上にポップ(SE info)。hook スロットが終わると吹き出しは左上に小さく残る。main スロット = 回答、開始時に note(回答の一言)を大きく → エンド |
+
+### 5.11 カット・トランジション(`common/transitions.ts` 純関数 + `common/CutTransition.tsx`)
+
+HyperFrames のシェーダートランジションの発想を、**クリップの尺・重なりを一切変えずに**実現する「カット型」トランジション。
+クリップは隙間なく並ぶだけ(重ならない)なので、カット位置の前 `nOut` フレーム(出ていくショットの最後)と後 `nIn` フレーム
+(入ってくるショットの最初)に同じ効果を掛け、カットの瞬間に最大(t = 1)になるようにする(ショート動画編集アプリのホイップ/ズーム遷移と同じ)。
+
+- **データ**(スキーマ版数は上げない・任意項目): `style.transition?: { preset: "auto"|"none"|"whip"|"zoom"|"glitch"|"flash"; intensity?: 0..1 }`。
+  無し = `{ preset: "auto" }`、intensity 無し = `DEFAULT_TRANSITION_INTENSITY`(0.6)。`DEFAULT_STYLE` は `{ preset: "auto", intensity: 0.6 }`。
+- **テンプレート**: `TemplateTimeline.transitionCuts?: { frame; auto: TransitionKind }[]`(絶対フレーム + そのカットのおすすめ効果、"none" 可)。
+  既存の各テンプレートの `cuts` フィールド(帯の発光・SE 用、テンプレートごとに意味が違う)とは別物。ショートは `transitionCutsOf(cuts, auto, before)`(kit)で作る。
+  **テンプレート独自の演出があるカットは入れない**(セクション間のスワイプ、意図的なハードカット、カード/ロゴ/エンドカードへの出入り)。
+- **解決**(`buildTransitionSchedule`): preset "auto" = 各カットの `auto`、それ以外 = 全カットをその効果に("none" = 全く無し)。
+  半分の長さ(30fps): whip 5+6 / zoom 5+6 / glitch 4+5 / flash 3+6 フレーム。隣のカットとの間隔の半分を超えない(重ならない)。
+- **適用範囲 = プレイ映像だけ**: `<AdVideo>` がスケジュールを `TransitionContext` で配り(フレームごとに変わらない memo 値)、SVG フィルタ定義
+  `<TransitionDefs>` を 1 つ置く。**`<ClipTrack>` が自分の映像を `<TransitionLayer>` で包む**(絶対フレーム = `useCurrentFrame() + sectionFrom`)。
+  そのため字幕・ウォーターマーク・テンプレートの文字/カード/エンドカードは一切ぶれない。ClipTrack は映っているクリップがあるときだけ効果を掛ける
+  (trivia のようにクリップごとに ClipTrack を置くテンプレートで無駄なフィルタを掛けない)。
+  トランジションの掛かったカットでは ClipTrack の従来の「パンチ」(ズーム + 白フラッシュ)と trailer の入り演出(Cut.tsx の entrance)は出さない(`useCoveredCut`)。
+- **効果**(強さ g = 0.15 + 1.4·intensity、px は短辺 1080 基準):
+  - `whip`: 横方向モーションブラー(SVG `feGaussianBlur stdDeviation="x 0"`、最大 ~95px)+ 横スライド(幅の最大 ~12%、カットごとに向きを交互)+ 少し明るく。
+  - `zoom`: 出 = 押し込み、入 = 押し込んだ状態から戻る(連続ズームイン、最大 ×1.4)+ 弱い全体ブラー + 周辺だけ強いブラー
+    (`backdrop-filter: blur()` を中心透明の放射グラデーションでマスク = 放射ブラー風)。
+  - `glitch`: SVG で横縞(`feTurbulence baseFrequency="0 y"` → `feComponentTransfer discrete`)を `feDisplacementMap` で横ずらし + RGB 分離
+    (`feColorMatrix` で R/G/B を分け `feOffset` で左右にずらして `feComposite arithmetic` で足す)。種はカット番号 + フレーム(決定的)。
+  - `flash`: 白フラッシュ(カットで最大 ~0.95)+ 露出アップ + 入りに小さなズーム。
+  - 黒い縁が出ないよう、移動量・ずらし量に応じて拡大(overscale)する。フィルタ領域は要素の箱(`objectBoundingBox 0..1`)で
+    `edgeMode="duplicate"`(ブラーが透明な外側を取り込んで縁が暗くならない)。16:9 / 9:16 blur / crop / ショートの帯レイアウトとも ClipTrack の箱の中で完結。
+- **auto(テンプレートごとのおすすめ)**: hook-play-cta = whip/zoom 交互(フック内・フック→本編・本編内)/ features = 各セクション内のカットに whip(セクション境界は従来のスワイプ)/
+  trailer = cut→cut のみ flash→glitch→whip→zoom の順(カード・ロゴの前後は従来の入り演出)/ intro = whip / question・dev-pitch = whip/zoom 交互 / challenge = zoom /
+  comment = whip(回答への切り替えは zoom)/ fail-win = 失敗パートは glitch・逆転パートは whip(失敗→カード→逆転、スロー→通常速度の境目は除外)/
+  payoff = 溜めのカットに whip(爆発のカットは専用演出なので除外)/ before-after = whip(ビフォー→アフターのハードカットと比較部分は除外)/
+  list = 見出しのカットに whip、番号カード後に項目映像が入るところに zoom / devlog・trivia・loop = none(素朴なカット・参考どおりのハードカット・ループの継ぎ目優先。
+  プリセットを明示すれば掛かる。loop はつなぎ目のクロスフェード 0.5 秒前以降のカットを除外)。web の説明文は `StylePanel.tsx` の `TRANSITION_AUTO`(同期すること)。
+- **web**: スタイルタブ「トランジション」= おまかせ / なし / ホイップ / ズーム / グリッチ / フラッシュ + 強さスライダー。
 
 ## 6. Server HTTP API(`@gas/server`, port 3101)
 
@@ -900,6 +959,7 @@ resolveVoicevoxEnginePath(): Promise<string | null>
   ライブラリのファイルを `assets/<nanoid(10)><ext>` に **コピー**(参照しない — プロジェクトと書き出しを自己完結させ、既存のレンダー経路をそのまま使う)、
   `audio.bgm` を設定(以前の BGM があれば volume / duckingDb / fadeOutSec / loop を引き継ぎ、無ければ `DEFAULT_BGM`)、beats / bpm / analysisError は消して
   `analysisStatus: "running"`、`audio.bgm.library = { id, credit?, source?, url? }`(bgm.json のスナップショット)を記録し、§6.11 と同じビート解析をバックグラウンドで開始。
+  あわせて声の帯域カット(§5.3.1、`voiceCarveStatus: "running"`)も開始し、以前の BGM の `duckMode` を引き継ぐ。
   404: プロジェクト / ライブラリのファイルが無い。400: 不正 id。古い assets のファイルは消さない(従来のアップロードと同じ)。
 - 直接アップロード(`POST /assets` → web が `audio.bgm` を作り直す従来フロー)は `library` を持たない(= ライブラリのクレジット無し)。
 - **クレジット**: `collectBgmCredits(project)` = BGM があり volume > 0 なら `audio.bgm.library.credit`(言語非依存)。`collectCredits` に含まれるので

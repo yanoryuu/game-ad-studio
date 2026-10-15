@@ -1,5 +1,5 @@
 import type React from "react";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { AbsoluteFill, useVideoConfig } from "remotion";
 import type { Format, Lang, Project } from "@gas/shared";
 import { getTemplate } from "./templates";
@@ -10,6 +10,8 @@ import { SeTrack, buildSeSchedule } from "./common/SeTrack";
 import { makeDuckEnvelope } from "./common/audioMix";
 import { DuckContext } from "./common/mixContext";
 import { BODY_FONT } from "./common/fonts";
+import { TransitionContext, TransitionDefs, type TransitionContextValue } from "./common/CutTransition";
+import { buildTransitionSchedule, transitionGain, transitionSetting } from "./common/transitions";
 
 /**
  * Props of the "AdVideo" composition. MUST stay a `type` alias (not an
@@ -29,10 +31,12 @@ export type AdVideoProps = {
  * The single composition. Dispatches to the template module of project.template (templates/index.ts),
  * which renders the visuals from its timeline; this component adds what every template shares:
  * black background + body font, the ducking envelope, captions, narration audio and BGM, and (v4) the sound
- * effects of tl.seEvents (+ caption pops when tl.captionPopSe).
+ * effects of tl.seEvents (+ caption pops when tl.captionPopSe), and (§5.11) the cut transitions of tl.transitionCuts
+ * (applied by every ClipTrack to its footage only, via TransitionContext).
  */
 export const AdVideo: React.FC<AdVideoProps> = ({ project, format, lang, assetBaseUrl, useProxy }) => {
   const { fps } = useVideoConfig();
+  const rawId = useId();
   const template = getTemplate(project.template);
   // ONE timeline (sections + narration plan) shared with calcAdMetadata / buildNarrationPlan
   const tl = useMemo(() => template.buildTimeline(project, fps, lang), [template, project, fps, lang]);
@@ -45,12 +49,21 @@ export const AdVideo: React.FC<AdVideoProps> = ({ project, format, lang, assetBa
     () => buildSeSchedule(project, tl.seEvents, captionItems, tl.captionPopSe === true, tl.totalFrames, fps),
     [project, tl, captionItems, fps],
   );
+  const schedule = useMemo(() => buildTransitionSchedule(project, tl.transitionCuts, tl.totalFrames, fps), [project, tl, fps]);
+  const covered = useMemo(() => new Set(schedule.map((s) => s.frame)), [schedule]);
+  const gain = transitionGain(transitionSetting(project).intensity);
+  const transition = useMemo<TransitionContextValue>(
+    () => ({ schedule, covered, gain, uid: "gastr" + rawId.replace(/[^a-zA-Z0-9_-]/g, "") }),
+    [schedule, covered, gain, rawId],
+  );
   const cs = project.style.captions;
   const Visuals = template.Component;
 
   return (
     <DuckContext.Provider value={duck}>
+    <TransitionContext.Provider value={transition}>
     <AbsoluteFill style={{ backgroundColor: "black", fontFamily: BODY_FONT }}>
+      <TransitionDefs />
       <Visuals project={project} format={format} lang={lang} assetBaseUrl={assetBaseUrl} useProxy={useProxy} timeline={tl} />
       {cs.enabled ? (
         <Captions
@@ -72,6 +85,7 @@ export const AdVideo: React.FC<AdVideoProps> = ({ project, format, lang, assetBa
       {project.audio.bgm ? <Bgm project={project} assetBaseUrl={assetBaseUrl} /> : null}
       {se.length > 0 ? <SeTrack project={project} events={se} assetBaseUrl={assetBaseUrl} /> : null}
     </AbsoluteFill>
+    </TransitionContext.Provider>
     </DuckContext.Provider>
   );
 };

@@ -4,6 +4,7 @@ import { calcAdMetadata } from "@gas/compositions";
 import { api, ApiError } from "../api";
 import { DEFAULT_GAME_VOLUME, insertClip } from "../autoArrange";
 import { droppedKind, useWindowFileDrop } from "../hooks/useFileDrop";
+import { useBgmVoiceCarveAuto } from "../hooks/useBgmAnalysis";
 import { useHealth } from "../hooks/useHealth";
 import { useProject, type SaveState } from "../hooks/useProject";
 import { useSeCreditsSync } from "../hooks/useSeLibrary";
@@ -71,6 +72,8 @@ export function Editor({ projectId }: { projectId: string }) {
 
   // v4: keep audio.se.credits (snapshot used by renders / the end card) in sync with the SE library (§6.12).
   useSeCreditsSync(project, update, !!project && templateUsesSe(project.template));
+  // Voice-band ducking (§5.3.1): generate the carved BGM copy when it is missing.
+  useBgmVoiceCarveAuto(project, mutateOnServer, health.status === "ok");
 
   // Reload the project once the server comes back after a failed load.
   const { reload, loadError } = store;
@@ -81,7 +84,8 @@ export function Editor({ projectId }: { projectId: string }) {
   // Background work (proxy encoding / highlight analysis): poll GET and merge server-owned fields.
   const needsPoll =
     !!project?.sources.some((s) => s.proxyStatus === "pending" || s.analysisStatus === "running") ||
-    project?.audio.bgm?.analysisStatus === "running";
+    project?.audio.bgm?.analysisStatus === "running" ||
+    project?.audio.bgm?.voiceCarveStatus === "running";
   useEffect(() => {
     if (!needsPoll) return;
     const t = window.setInterval(() => void refreshServerOwned(), POLL_MS);

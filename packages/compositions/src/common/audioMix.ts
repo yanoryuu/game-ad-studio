@@ -47,6 +47,24 @@ export function gameDuckGain(project: Project, env: DuckEnvelope, absFrame: numb
   return 1 - env(absFrame) * (1 - under);
 }
 
+/**
+ * Voice-band ducking (ARCHITECTURE §5.3.1): fraction of duckingDb applied broadband to the voice-carved copy.
+ * The carved file already cuts ~10 dB around 1–3 kHz, so with the default -12 dB the speech band ends up ~-16 dB
+ * while bass / highs only drop 6 dB (volume mode: everything -12 dB).
+ */
+export const BAND_DUCK_BROADBAND_RATIO = 0.5;
+
+/**
+ * Band-mode BGM gains at `absFrame`: `dry` for the original file = 1 - env, `wet` for the voice-carved copy
+ * = env × 10^(duckingDb × BAND_DUCK_BROADBAND_RATIO / 20). Both files are sample-aligned, so the crossfade
+ * during the ramps is a plain linear mix.
+ */
+export function bgmBandDuckGains(duckingDb: number, env: DuckEnvelope, absFrame: number): { dry: number; wet: number } {
+  const e = env(absFrame);
+  const wetLevel = Math.pow(10, (Math.min(0, duckingDb) * BAND_DUCK_BROADBAND_RATIO) / 20);
+  return { dry: 1 - e, wet: e * wetLevel };
+}
+
 /** BGM gain multiplier at `absFrame`: 1 -> 10^(duckingDb/20) while narration plays. */
 export function bgmDuckGain(duckingDb: number, env: DuckEnvelope, absFrame: number): number {
   const under = Math.pow(10, Math.min(0, duckingDb) / 20);

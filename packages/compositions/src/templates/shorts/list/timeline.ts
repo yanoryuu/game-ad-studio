@@ -16,6 +16,7 @@ import {
   textOf,
   SE_GAIN,
   type SectionMark,
+  transitionCutsOf,
 } from "../common";
 
 /**
@@ -161,6 +162,7 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): ListTi
   });
   const itemClips: PlacedClip[] = [];
   const cuts: number[] = [...titleLay.cuts];
+  const itemCutFrames: number[] = [];
   if (itemPool.length > 0) {
     for (const e of entries) {
       const at = e.from + e.cardFrames;
@@ -168,6 +170,7 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): ListTi
       // item i uses the i-th main clip (data order), repeated when there are fewer clips than items
       itemClips.push(...fillInterval(itemPool[e.index % itemPool.length]!, at, e.to - at, `li${e.order}`));
       cuts.push(at);
+      itemCutFrames.push(at);
     }
   }
 
@@ -201,6 +204,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): ListTi
     entries,
     titleClips: titleLay.clips,
     itemClips,
+    // §5.11 cut transitions (auto): whip on the title cuts, zoom when an item's footage comes in after its number card
+    transitionCuts: [...transitionCutsOf(titleLay.cuts, "whip", titleFrames), ...transitionCutsOf(itemCutFrames, "zoom", body)],
     cuts: [...new Set(cuts)].filter((c) => c > 0 && c < body).sort((a, b) => a - b),
   };
 }

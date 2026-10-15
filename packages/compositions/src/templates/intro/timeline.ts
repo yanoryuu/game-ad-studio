@@ -184,6 +184,8 @@ export function buildTimeline(project: Project, fps: number, lang: Lang): IntroT
     captionLayout: { scale: 1.3, verticalMode: "blur" },
     body: { from: 0, durationInFrames: bodyFrames, clips },
     cuts,
+    // §5.11 cut transitions on every strip cut (the strip frame glow stays); auto = whip
+    transitionCuts: cuts.map((frame) => ({ frame, auto: "whip" as const })),
     endCard: { from: bodyFrames, durationInFrames: endFrames, clips: [] },
     info,
     points,
