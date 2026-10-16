@@ -445,3 +445,44 @@ export type BgmManifestUpdateRequest = z.infer<typeof bgmManifestUpdateRequestSc
 export const bgmFromLibraryRequestSchema = z.object({ id: seFileIdSchema });
 export type BgmFromLibraryRequest = z.infer<typeof bgmFromLibraryRequestSchema>;
 export type BgmFromLibraryResponse = Project;
+
+/* ------------------------------------------------------------------ */
+/* Still frames (MCP preview_frames, ARCHITECTURE §9)                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * POST /api/projects/:id/stills -> StillsResponse. Renders still frames of the SAVED project (same bundle,
+ * browser and asset setup as /render; originals, not proxies) at the given output-timeline seconds.
+ * Times are clamped to the video length. Files are written to projects/<id>/stills/ (overwritten per request
+ * name) and also returned base64-encoded.
+ */
+export const stillsRequestSchema = z.object({
+  format: formatSchema,
+  lang: langSchema,
+  /** output-timeline seconds, 1..12 entries */
+  times: z.array(z.number().min(0)).min(1).max(12),
+  /** output width in px (downscaled from the composition; default 540, never upscaled) */
+  width: z.number().int().min(120).max(1920).optional(),
+  imageFormat: z.enum(["jpeg", "png"]).optional(),
+});
+export type StillsRequest = z.infer<typeof stillsRequestSchema>;
+
+export const stillsResponseSchema = z.object({
+  width: z.number(),
+  height: z.number(),
+  fps: z.number(),
+  durationInFrames: z.number(),
+  durationSec: z.number(),
+  frames: z.array(
+    z.object({
+      /** requested seconds (after clamping) */
+      sec: z.number(),
+      frame: z.number().int(),
+      mimeType: z.string(),
+      /** absolute local path of the written image */
+      absPath: z.string(),
+      base64: z.string(),
+    }),
+  ),
+});
+export type StillsResponse = z.infer<typeof stillsResponseSchema>;

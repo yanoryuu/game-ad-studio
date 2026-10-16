@@ -1,0 +1,25 @@
+{
+  "name": "@gas/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "stdio MCP server for Game Ad Studio (wraps the HTTP API on :3101)",
+  "bin": {
+    "game-ad-studio-mcp": "./bin/game-ad-studio-mcp.mjs"
+  },
+  "scripts": {
+    "start": "node bin/game-ad-studio-mcp.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@gas/compositions": "*",
+    "@gas/shared": "*",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "tsx": "4.23.15",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "typescript": "5.9.3"
+  }
+}

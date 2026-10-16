@@ -9,7 +9,8 @@
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,green \"npm run dev -w @gas/server\" \"npm run dev -w @gas/web\"",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "studio": "remotion studio packages/compositions/src/entry.ts"
+    "studio": "remotion studio packages/compositions/src/entry.ts",
+    "mcp": "node apps/mcp/bin/game-ad-studio-mcp.mjs"
   },
   "devDependencies": {
     "@remotion/cli": "4.0.535",

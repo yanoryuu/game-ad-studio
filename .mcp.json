@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "game-ad-studio": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["apps/mcp/bin/game-ad-studio-mcp.mjs"],
+      "env": {}
+    }
+  }
+}

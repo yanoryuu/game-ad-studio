@@ -10,6 +10,7 @@ import {
   createProjectRequestSchema,
   migrateProject,
   renderRequestSchema,
+  stillsRequestSchema,
   type HealthResponse,
   type Project,
   type AddSourceResponse,
@@ -23,7 +24,7 @@ import { badRequest, errorHandler, notFound, notFoundHandler, parseBody } from "
 import { sendFileWithRange, serveProjectFile } from "./files";
 import { toolAvailable } from "./media";
 import { LISTEN_PORT, PROJECTS_DIR, projectDir } from "./paths";
-import { enqueueRender, getJob } from "./render";
+import { enqueueRender, getJob, renderStills } from "./render";
 import { registerAnalysisRoutes } from "./routes/analysis";
 import { registerBgmRoutes } from "./routes/bgm";
 import { initBgmLibrary, registerBgmLibraryRoutes } from "./routes/bgmLibrary";
@@ -212,6 +213,13 @@ app.post("/api/projects/:id/render", async (req, res) => {
   const jobId = enqueueRender(id, body);
   const out: RenderStartResponse = { jobId };
   res.json(out);
+});
+
+/** Still frames of the saved project (MCP preview_frames, ARCHITECTURE §9). Synchronous; JSON with base64 images. */
+app.post("/api/projects/:id/stills", async (req, res) => {
+  const id = assertSafeId(req.params.id);
+  const body = parseBody(stillsRequestSchema, req.body);
+  res.json(await renderStills(id, body));
 });
 
 app.get("/api/render/:jobId", (req, res) => {

@@ -83,6 +83,7 @@ game-ad-studio/
       src/routes/se.ts       [v4] registerSeRoutes(app) / initSeLibrary() SE ライブラリ API(実装済み、§6.12)
       src/se/**              [v4] SE ライブラリ(library.ts: 一覧・マニフェスト・パス解決 / placeholders.ts: 仮 SE 生成)
     web/                  @gas/web     Vite + React :5173
+    mcp/                  @gas/mcp     stdio MCP サーバー(HTTP API のラッパー、§9)
   projects/               実行時データ(git 管理外)
 
 D:\Tools\se\              [v4] SE ライブラリ(リポジトリ外。config `se.dir`、§6.12)
@@ -745,6 +746,7 @@ HyperFrames のシェーダートランジションの発想を、**クリップ
 | PUT | `/api/se/manifest` | `SeManifestUpdateRequest` | **[v4] `SeListResponse`**(クレジットをマージ) |
 | GET | `/api/se/file/*path` | — | **[v4] SE ファイル(Range 対応、no-cache)** |
 | POST | `/api/se/upload` | multipart `"file"`(`SE_EXTS`、≤ 50 MB) | **`SeListResponse`**(ライブラリ直下に元のファイル名でコピー、§6.12) |
+| POST | `/api/projects/:id/stills` | `StillsRequest` `{ format, lang, times[] (1..12), width?, imageFormat? }` | **`StillsResponse`**(保存済みプロジェクトの静止画。書き出しと同じバンドル・Chrome・assetBaseUrl。`projects/<id>/stills/` に保存 + base64。MCP の preview_frames 用、§9) |
 
 ### 6.1 ソース登録 [v2: 非同期]
 1. path の存在確認(無ければ 400)→ ffprobe(読めなければ 400)。durationSec/fps/width/height/hasAudio はこの時点で確定。
@@ -1038,3 +1040,34 @@ resolveVoicevoxEnginePath(): Promise<string | null>
    [v4] 静的サーバーで `/api/se/file/<id>` も `D:\Tools\se` から返すとよい(静止画では音声は読まれない)。
    hook-play-cta / features / trailer の静止画は Phase 3.5 の共通部品変更(字幕の強調対応・SE)の前後でピクセル一致を確認済み。
 5. [v4] SE の確認: `renderMedia({ codec: "wav" })` で音声だけ書き出せば速い(assetBaseUrl は SE を返せるサーバー)。
+
+## 9. MCP サーバー(`@gas/mcp`, `apps/mcp`)
+
+Claude Desktop / Claude Code から広告動画を作るための **stdio MCP サーバー**。HTTP API(§6)の薄いラッパーで、業務ロジックは持たない
+(タイムラインの秒数・溢れ判定だけ `@gas/compositions` の `getSectionDurations` / `buildNarrationPlan` を読み取り専用で使う)。
+
+- 依存: `@modelcontextprotocol/sdk` 1.32.1(zod 4 をそのまま使う)、`tsx`(TS ソースのまま実行)。ビルド不要。
+- 起動: `node apps/mcp/bin/game-ad-studio-mcp.mjs`(= `npm run mcp`)。ランチャーは console.* を stderr に向け、cwd をリポジトリに移し、
+  `tsx/esm/api` の `register()` で `src/index.ts` を読む(どの cwd・PATH からでも動く。stdout は MCP プロトコル専用)。
+- 構成: `src/index.ts`(McpServer + stdio)、`tools.ts`(ツール定義)、`ops.ts`(素材取り込み・クリップ・台本・音声・書き出しの操作)、
+  `project.ts`(GET → 変更 → PUT、プロジェクト単位の直列化、要約・警告)、`templateEdit.ts`(テンプレート設定の入力と適用)、
+  `templates.ts`(15 テンプレートの説明。ショート系は `SHORT_TEMPLATE_META` が正)、`heuristics.ts`(make_ad の台本・文言の下書き。LLM は呼ばない)、
+  `autostart.ts` / `api.ts` / `env.ts`。
+- 編集は web と同じく **GET → 変更 → PUT**(サーバー所有のフィールドは §6.2 の `mergeServerOwned` が守る)。MCP プロセス内ではプロジェクトごとに
+  直列化(ソース追加中に古いスナップショットで PUT してソースを消さないため)。ボディは PUT 前に `projectSchema` で検証。
+- ツール: get_status / list_templates / list_projects / get_project / list_bgm / list_se / create_project / update_project / add_sources /
+  get_candidates / set_clips / set_template_data / set_script / set_style / set_audio / preview_frames / render / render_batch /
+  get_render_status / list_renders / make_ad。エラーは `isError` + 対処の書いたメッセージ。長い処理は `notifications/progress` を送る。
+- **静止画プレビュー**: `POST /api/projects/:id/stills`(§6 表)。`render.ts` の `renderStills` が書き出しと同じスナップショット準備
+  (`loadRenderSnapshot`)・バンドルキャッシュ・Chrome(`openBrowser` を 1 回開いて全フレームで共有)で `renderStill`(既定 幅 540 px の JPEG)。
+- **自動起動**(`autostart.ts`、全ツールの最初に `ensureServer()`):
+  1. `GET /api/health` が通ればそのまま。2. ポート(3101 / `GAS_PORT`)が LISTEN 中なら **2 つ目は起動せず** health を待つだけ。
+  3. それ以外は `powershell Start-Process -WindowStyle Hidden` で `apps/mcp/bin/start-api-server.mjs` を起動。これは `npm run dev -w @gas/server`
+     と同じ `tsx watch --clear-screen=false src/index.ts`(apps/server)を子として動かし、出力を `<repo>/.logs/api-server.log`(git 管理外)に追記する監督プロセス。
+     PowerShell 経由なので MCP プロセスの子孫として kill されず(libuv の kill-on-close ジョブは直接の子だけ)、MCP 終了後も動き続ける。
+     隠しコンソールを持つので ffmpeg / Chrome / Remotion compositor がウィンドウを出さない(Node の `detached` はコンソール無しになり子がウィンドウを開くので使わない)。
+     監督プロセスを止めればサーバーも止まる。health を最大 60 秒ポーリング。`.logs/api-autostart-<port>.lock`(90 秒)で複数の MCP からの同時起動を防ぐ。
+  - `start.ps1` との関係: start.ps1 は 3101 だけ生きていて 5173 が無い状態を「残骸」とみなして止め、`npm run dev` でサーバー + web を起動し直す。MCP はどちらのサーバーでも使える。
+  - 環境変数: `GAS_PORT`(接続先・自動起動のポート)、`GAS_MCP_NO_AUTOSTART=1`(自動起動しない)、`GAS_PROJECTS_DIR`(パス表示用。サーバーと同じ値にする)。
+- 登録: プロジェクトスコープ `<repo>/.mcp.json`(Claude Code、`node apps/mcp/bin/game-ad-studio-mcp.mjs`)、ユーザースコープ(`claude mcp add --scope user`)、
+  Claude Desktop(`claude_desktop_config.json` の `mcpServers["game-ad-studio"]`、node.exe とランチャーは絶対パス)。Desktop は設定変更後に再起動が必要。

@@ -3,8 +3,17 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { bundle } from "@remotion/bundler";
-import { renderMedia, selectComposition } from "@remotion/renderer";
-import { isStillImageSource, type Format, type Fps, type Lang, type Project, type RenderJob } from "@gas/shared";
+import { openBrowser, renderMedia, renderStill, selectComposition } from "@remotion/renderer";
+import {
+  isStillImageSource,
+  type Format,
+  type Fps,
+  type Lang,
+  type Project,
+  type RenderJob,
+  type StillsRequest,
+  type StillsResponse,
+} from "@gas/shared";
 // type-only: importing the compositions package at runtime would pull React/fonts into the server process
 import type { AdVideoProps } from "@gas/compositions";
 import { notFound } from "./errors";
@@ -196,11 +205,10 @@ function dropMissingSe(project: Project) {
   }
 }
 
-async function runJob(job: JobInternal): Promise<void> {
-  const started = Date.now();
-  // Snapshot the project when the job starts (picks up the latest saved edits).
-  const loaded = await readProject(job.projectId);
-  const project: Project = { ...structuredClone(loaded), ...(job.fps ? { fps: job.fps } : {}) };
+/** Snapshot of the saved project prepared for a headless render (render jobs and stills). */
+async function loadRenderSnapshot(projectId: string, fps?: Fps): Promise<Project> {
+  const loaded = await readProject(projectId);
+  const project: Project = { ...structuredClone(loaded), ...(fps ? { fps } : {}) };
   checkSources(project);
   dropMissingSe(project);
   // Voice-band ducking (§5.3.1): a missing carved file would 404 -> fall back to volume ducking.
@@ -209,6 +217,84 @@ async function runJob(job: JobInternal): Promise<void> {
     console.warn(`[render] BGM voice-carved file not found (${vc}); using volume ducking`);
     delete project.audio.bgm!.voiceCarvePath;
   }
+  return project;
+}
+
+const browserExecutableOrNull = (): string | null => (fs.existsSync(BROWSER_EXECUTABLE) ? BROWSER_EXECUTABLE : null);
+
+/**
+ * Still frames of the saved project (POST /api/projects/:id/stills, used by the MCP server's preview_frames).
+ * Same bundle / browser / asset base URL as the render jobs; one browser for all frames. Not queued (may run
+ * alongside a render job).
+ */
+export async function renderStills(projectId: string, req: StillsRequest): Promise<StillsResponse> {
+  const started = Date.now();
+  const project = await loadRenderSnapshot(projectId);
+  const serveUrl = await getServeUrl();
+  const inputProps: AdVideoProps = { project, format: req.format, lang: req.lang, assetBaseUrl: ASSET_BASE_URL, useProxy: false };
+  const browserExecutable = browserExecutableOrNull();
+  const browser = await openBrowser("chrome", { browserExecutable, logLevel: "warn" });
+  try {
+    const composition = await selectComposition({
+      serveUrl,
+      id: COMPOSITION_ID,
+      inputProps,
+      browserExecutable,
+      puppeteerInstance: browser,
+      logLevel: "warn",
+    });
+    const scale = Math.min(1, (req.width ?? 540) / composition.width);
+    const imageFormat = req.imageFormat ?? "jpeg";
+    const ext = imageFormat === "png" ? "png" : "jpg";
+    const dir = path.join(projectDir(projectId), "stills");
+    await fsp.mkdir(dir, { recursive: true });
+    const frames: StillsResponse["frames"] = [];
+    for (const t of req.times) {
+      const frame = Math.max(0, Math.min(composition.durationInFrames - 1, Math.round(t * composition.fps)));
+      const out = path.join(dir, `${req.format.replace(":", "x")}_${req.lang}_f${String(frame).padStart(5, "0")}.${ext}`);
+      await renderStill({
+        composition,
+        serveUrl,
+        output: out,
+        overwrite: true,
+        frame,
+        imageFormat,
+        jpegQuality: 85,
+        scale,
+        inputProps,
+        browserExecutable,
+        puppeteerInstance: browser,
+        logLevel: "warn",
+        timeoutInMilliseconds: 120_000,
+      });
+      frames.push({
+        sec: frame / composition.fps,
+        frame,
+        mimeType: imageFormat === "png" ? "image/png" : "image/jpeg",
+        absPath: out,
+        base64: (await fsp.readFile(out)).toString("base64"),
+      });
+    }
+    console.log(
+      `[render] stills ${projectId} ${req.format} ${req.lang}: ${frames.length} frame(s) in ${((Date.now() - started) / 1000).toFixed(1)}s`,
+    );
+    return {
+      width: Math.round(composition.width * scale),
+      height: Math.round(composition.height * scale),
+      fps: composition.fps,
+      durationInFrames: composition.durationInFrames,
+      durationSec: composition.durationInFrames / composition.fps,
+      frames,
+    };
+  } finally {
+    await browser.close({ silent: true }).catch(() => {});
+  }
+}
+
+async function runJob(job: JobInternal): Promise<void> {
+  const started = Date.now();
+  // Snapshot the project when the job starts (picks up the latest saved edits).
+  const project = await loadRenderSnapshot(job.projectId, job.fps);
 
   job.status = "bundling";
   job.progress = 0;
@@ -230,7 +316,7 @@ async function runJob(job: JobInternal): Promise<void> {
   const outputLocation = path.join(rendersDir, name);
 
   job.status = "rendering";
-  const browserExecutable = fs.existsSync(BROWSER_EXECUTABLE) ? BROWSER_EXECUTABLE : null;
+  const browserExecutable = browserExecutableOrNull();
   if (!browserExecutable) console.warn(`[render] browser not found at ${BROWSER_EXECUTABLE}; Remotion will resolve/download one`);
 
   const composition = await selectComposition({
